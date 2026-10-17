@@ -1,0 +1,34 @@
+{
+  "engine": "postgres",
+  "version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "rows": 10000000,
+  "orders": 1000000,
+  "runs": 3,
+  "when": "2026-10-17T18:10:31.574839435Z",
+  "results": [
+    {
+      "query": "Full scan, 10000000 rows, 2 tokenized columns",
+      "unmasked_ns": 676245837,
+      "md5_floor_ns": 5367941968,
+      "masked_ns": 16862657165,
+      "ratio": 24.93569090170976,
+      "md5_floor_ratio": 3.1413635366260726,
+      "overhead_per_row_column_ns": 809,
+      "verdict": "KILL by review gate (\u003e 5x); md5() alone is 7.9x"
+    },
+    {
+      "query": "Lookup of 1000 rows by primary key",
+      "unmasked_ns": 8713848,
+      "masked_ns": 14329495,
+      "ratio": 1.6444508786474128,
+      "verdict": "PASS (\u003c 100ms)"
+    },
+    {
+      "query": "Join 10000000 users to 1000000 orders on email token",
+      "unmasked_ns": 5839280557,
+      "masked_ns": 19207931686,
+      "ratio": 3.289434631287575,
+      "verdict": "INFO (no threshold set)"
+    }
+  ]
+}
