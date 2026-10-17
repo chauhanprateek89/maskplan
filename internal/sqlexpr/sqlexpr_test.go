@@ -61,3 +61,17 @@ func TestNoKeyMaterialInExpressions(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyJoin(t *testing.T) {
+	pg, p, err := KeyJoin(Postgres, "maskplan_internal.key_material", "k")
+	if err != nil || pg != "CROSS JOIN maskplan_internal.key_material k" || p.IPad != "k.ipad" || p.OPad != "k.opad" {
+		t.Errorf("postgres: %q %+v %v", pg, p, err)
+	}
+	my, _, err := KeyJoin(MySQL, "maskplan_internal.key_material", "k")
+	if err != nil || my != "JOIN maskplan_internal.key_material k ON k.id = 1" {
+		t.Errorf("mysql: %q %v", my, err)
+	}
+	if _, _, err := KeyJoin("oracle", "t", "k"); err == nil {
+		t.Error("unknown engine accepted")
+	}
+}

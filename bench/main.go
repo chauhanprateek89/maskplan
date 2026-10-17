@@ -213,18 +213,10 @@ var (
 	phoneCol = func(expr string) sqlexpr.Column {
 		return sqlexpr.Column{Expr: expr, Label: "user.contact.phone", Normalizer: token.Phone}
 	}
-	// Uncorrelated scalar subqueries are evaluated once per statement, and
-	// keep each view's columns dependent on one base table only. A CROSS JOIN
-	// to the key table instead stops MySQL from hash-joining two masked views
-	// on a token: the join degenerates into a nested loop over every pair.
-	pads = sqlexpr.Pads{
-		IPad: "(SELECT ipad FROM " + internalSchema + ".key_material)",
-		OPad: "(SELECT opad FROM " + internalSchema + ".key_material)",
-	}
 )
 
-func tokenExpr(e sqlexpr.Engine, c sqlexpr.Column) string {
-	s, err := sqlexpr.Token(e, c, pads)
+func tokenExpr(e sqlexpr.Engine, c sqlexpr.Column, p sqlexpr.Pads) string {
+	s, err := sqlexpr.Token(e, c, p)
 	must(err)
 	return s
 }
@@ -252,14 +244,22 @@ func createKeyAndViews(ctx context.Context, db *sql.DB, e sqlexpr.Engine, key []
 	// One row only, so the scalar subqueries in the views are well defined.
 	mustExec(ctx, db, fmt.Sprintf("CREATE TABLE %s.key_material (id smallint PRIMARY KEY CHECK (id = 1), ipad %s NOT NULL, opad %s NOT NULL)", internalSchema, binType, binType))
 	mustExec(ctx, db, fmt.Sprintf("INSERT INTO %s.key_material VALUES (1, %s)", internalSchema, placeholder), ipad, opad)
+	// Without statistics Postgres assumes hundreds of rows in the key table.
+	if e == sqlexpr.Postgres {
+		mustExec(ctx, db, "ANALYZE "+internalSchema+".key_material")
+	} else {
+		mustExec(ctx, db, "ANALYZE TABLE "+internalSchema+".key_material")
+	}
 
 	for _, v := range []string{"v_users", "v_orders"} {
 		mustExec(ctx, db, fmt.Sprintf("DROP VIEW IF EXISTS %s.%s", benchSchema, v))
 	}
-	users := fmt.Sprintf("SELECT u.id, %s AS email, %s AS phone FROM %s.users u",
-		tokenExpr(e, emailCol("u.email")), tokenExpr(e, phoneCol("u.phone")), benchSchema)
-	ordersSQL := fmt.Sprintf("SELECT o.id, %s AS customer_email FROM %s.orders o",
-		tokenExpr(e, emailCol("o.customer_email")), benchSchema)
+	keyJoin, pads, err := sqlexpr.KeyJoin(e, internalSchema+".key_material", "k")
+	must(err)
+	users := fmt.Sprintf("SELECT u.id, %s AS email, %s AS phone FROM %s.users u %s",
+		tokenExpr(e, emailCol("u.email"), pads), tokenExpr(e, phoneCol("u.phone"), pads), benchSchema, keyJoin)
+	ordersSQL := fmt.Sprintf("SELECT o.id, %s AS customer_email FROM %s.orders o %s",
+		tokenExpr(e, emailCol("o.customer_email"), pads), benchSchema, keyJoin)
 	mustExec(ctx, db, fmt.Sprintf(view, benchSchema, "v_users", users))
 	mustExec(ctx, db, fmt.Sprintf(view, benchSchema, "v_orders", ordersSQL))
 }

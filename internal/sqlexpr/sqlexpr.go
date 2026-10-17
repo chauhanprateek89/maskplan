@@ -31,6 +31,36 @@ type Pads struct {
 	OPad string
 }
 
+// KeyJoin returns the FROM-clause fragment that joins the one-row key table
+// into a masked view, and the pad expressions to use with it. The key table
+// must have a primary key column id constrained to 1, so it holds at most
+// one row; with no row the view returns nothing.
+//
+// The fragment differs by engine because each planner needs a different shape
+// to stay fast:
+//   - Postgres: CROSS JOIN. Scalar subqueries for the pads would make the
+//     query ineligible for parallel workers (about 2.5x slower on a 4-core
+//     full scan); a cross join with a one-row table keeps parallel scans and
+//     hash joins between masked views.
+//   - MySQL: JOIN ... ON id = 1. The primary-key lookup makes the key table a
+//     "const" table, read once at planning time, so token expressions depend
+//     on one base table only. Views stay mergeable and two masked views can
+//     be hash-joined on a token. A plain CROSS JOIN prevents that hash join;
+//     scalar subqueries make the view unmergeable, so MySQL materializes it.
+//     Const substitution puts the pad values into EXPLAIN output, which MySQL
+//     shows only to users with SHOW VIEW on the view: agent roles must never
+//     hold SHOW VIEW.
+func KeyJoin(e Engine, table, alias string) (string, Pads, error) {
+	p := Pads{IPad: alias + ".ipad", OPad: alias + ".opad"}
+	switch e {
+	case Postgres:
+		return fmt.Sprintf("CROSS JOIN %s %s", table, alias), p, nil
+	case MySQL:
+		return fmt.Sprintf("JOIN %s %s ON %s.id = 1", table, alias, alias), p, nil
+	}
+	return "", Pads{}, fmt.Errorf("unknown engine %q", e)
+}
+
 // Column describes one masked value: the SQL expression that yields it, the
 // label that namespaces its tokens, and how it is normalized.
 type Column struct {
