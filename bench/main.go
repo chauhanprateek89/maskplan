@@ -122,7 +122,9 @@ func main() {
 	if _, err := rand.Read(key); err != nil {
 		log.Fatal(err)
 	}
-	if !*skipSeed {
+	if *skipSeed {
+		checkSeeded(ctx, db)
+	} else {
 		seed(ctx, db, e)
 	}
 	createKeyAndViews(ctx, db, e, key)
@@ -204,6 +206,20 @@ func seed(ctx context.Context, db *sql.DB, e sqlexpr.Engine) {
 		mustExec(ctx, db, "ANALYZE TABLE maskplan_bench.users, maskplan_bench.orders")
 	}
 	log.Printf("seeded in %s", time.Since(start).Round(time.Millisecond))
+}
+
+// checkSeeded makes -skip-seed safe: the existing tables must have exactly
+// the requested sizes, or results would be reported for the wrong row count.
+func checkSeeded(ctx context.Context, db *sql.DB) {
+	for table, want := range map[string]int{"users": *rows, "orders": *orders} {
+		var n int
+		if err := db.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s.%s", benchSchema, table)).Scan(&n); err != nil {
+			log.Fatalf("-skip-seed: %v", err)
+		}
+		if n != want {
+			log.Fatalf("-skip-seed: %s.%s has %d rows, want %d; run without -skip-seed", benchSchema, table, n, want)
+		}
+	}
 }
 
 var (

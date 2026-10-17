@@ -60,7 +60,16 @@ HMAC(key, m) = SHA256(opad || SHA256(ipad || m))
 
 This is standard HMAC (RFC 2104), so the output equals `crypto/hmac`, `pgcrypto`'s `hmac()` and any other implementation. Computing it from pads means both engines need only their built-in SHA-256: no extension and no stored function.
 
-The pads are key material. They live in a one-row table (`maskplan_internal.key_material`) that agent roles cannot read. Views read the pads through uncorrelated scalar subqueries, which run once per statement with the view owner's rights. Pads never appear as literals in SQL, because Postgres exposes every view definition through `pg_views` and every function body through `pg_proc`, and MySQL writes view DDL to the binary log.
+The pads are key material. They live in a one-row table, `maskplan_internal.key_material (id, ipad, opad)` with `id` constrained to 1, that agent roles cannot read. Views join it with the view owner's rights. Pads never appear as literals in SQL, because Postgres exposes every view definition through `pg_views` and every function body through `pg_proc`, and MySQL writes view DDL to the binary log.
+
+How a view joins the key table depends on the engine, because each planner needs a different shape to stay fast (`sqlexpr.KeyJoin`):
+
+| Engine | Join | Why |
+| --- | --- | --- |
+| Postgres | `CROSS JOIN maskplan_internal.key_material k` | Keeps parallel scans. Scalar subqueries for the pads make a query ineligible for parallel workers. |
+| MySQL | `JOIN maskplan_internal.key_material k ON k.id = 1` | The primary-key lookup makes the key table a const table, read once at planning time. Views stay mergeable and two masked views hash-join on a token. A plain `CROSS JOIN` prevents the hash join; scalar subqueries make the view unmergeable, so MySQL materializes it in full. |
+
+Because MySQL substitutes const-table values into the plan, the pads appear in `EXPLAIN` output for these views. MySQL shows `EXPLAIN` for a view only to users who hold `SHOW VIEW` on it, so agent roles must never hold `SHOW VIEW`; `report` flags it. Whether MySQL's optimizer trace exposes the values to a role without `SHOW VIEW` is an open check.
 
 Rotating the key rewrites the key table. Tokens made with the old key no longer match, by design.
 
