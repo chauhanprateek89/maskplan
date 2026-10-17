@@ -47,9 +47,11 @@ type Pads struct {
 //     on one base table only. Views stay mergeable and two masked views can
 //     be hash-joined on a token. A plain CROSS JOIN prevents that hash join;
 //     scalar subqueries make the view unmergeable, so MySQL materializes it.
-//     Const substitution puts the pad values into EXPLAIN output, which MySQL
-//     shows only to users with SHOW VIEW on the view: agent roles must never
-//     hold SHOW VIEW.
+//     Const substitution puts the pad values into EXPLAIN output and the
+//     optimizer trace. MySQL 8.0 denies both for a view unless the user also
+//     has privileges on the underlying tables, including the key table, even
+//     with SHOW VIEW (verified on 8.0.46). Agent roles must never be granted
+//     anything on the key table.
 func KeyJoin(e Engine, table, alias string) (string, Pads, error) {
 	p := Pads{IPad: alias + ".ipad", OPad: alias + ".opad"}
 	switch e {

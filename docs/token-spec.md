@@ -69,7 +69,18 @@ How a view joins the key table depends on the engine, because each planner needs
 | Postgres | `CROSS JOIN maskplan_internal.key_material k` | Keeps parallel scans. Scalar subqueries for the pads make a query ineligible for parallel workers. |
 | MySQL | `JOIN maskplan_internal.key_material k ON k.id = 1` | The primary-key lookup makes the key table a const table, read once at planning time. Views stay mergeable and two masked views hash-join on a token. A plain `CROSS JOIN` prevents the hash join; scalar subqueries make the view unmergeable, so MySQL materializes it in full. |
 
-Because MySQL substitutes const-table values into the plan, the pads appear in `EXPLAIN` output for these views. MySQL shows `EXPLAIN` for a view only to users who hold `SHOW VIEW` on it, so agent roles must never hold `SHOW VIEW`; `report` flags it. Whether MySQL's optimizer trace exposes the values to a role without `SHOW VIEW` is an open check.
+Because MySQL substitutes const-table values into the plan, the pads appear in `EXPLAIN` output and in the optimizer trace for anyone allowed to see those. Checked on MySQL 8.0.46 with a role holding only `SELECT` on a masked view:
+
+| Attempt | Result |
+| --- | --- |
+| `SELECT` from the view | Returns tokens |
+| `SELECT` from `key_material` | Denied |
+| `EXPLAIN`, `EXPLAIN ANALYZE` | Denied: "lacking privileges for underlying table" |
+| Optimizer trace | Empty, `INSUFFICIENT_PRIVILEGES = 1` |
+| `SHOW CREATE VIEW` | Denied |
+| `information_schema.VIEWS.VIEW_DEFINITION` | Empty |
+
+Granting `SHOW VIEW` as well still leaves `EXPLAIN` and the trace denied; `SHOW CREATE VIEW` then works but shows only the reference to `key_material`, never key bytes. The pads are therefore exposed only to users with privileges on the key table or the base tables, which agent roles never get; `report` flags any such grant. CI should repeat this check on MySQL 8.4 and on each managed service.
 
 Rotating the key rewrites the key table. Tokens made with the old key no longer match, by design.
 
