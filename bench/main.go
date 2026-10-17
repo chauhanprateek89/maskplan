@@ -249,7 +249,9 @@ func createKeyAndViews(ctx context.Context, db *sql.DB, e sqlexpr.Engine, key []
 	ipad, opad := token.Pads(key)
 	mustExec(ctx, db, dropSchema(e, internalSchema))
 	mustExec(ctx, db, createSchema(e, internalSchema))
-	view := "CREATE VIEW %s.%s WITH (security_barrier) AS %s"
+	// No security_barrier: these views mask columns but filter no rows, and
+	// the option disables parallel workers on Postgres (see sqlexpr.KeySource).
+	view := "CREATE VIEW %s.%s AS %s"
 	placeholder := "$1, $2"
 	binType := "bytea"
 	if e == sqlexpr.MySQL {
@@ -270,7 +272,7 @@ func createKeyAndViews(ctx context.Context, db *sql.DB, e sqlexpr.Engine, key []
 	for _, v := range []string{"v_users", "v_orders"} {
 		mustExec(ctx, db, fmt.Sprintf("DROP VIEW IF EXISTS %s.%s", benchSchema, v))
 	}
-	keyJoin, pads, err := sqlexpr.KeyJoin(e, internalSchema+".key_material", "k")
+	keyJoin, pads, err := sqlexpr.KeySource(e, internalSchema+".key_material", "k")
 	must(err)
 	users := fmt.Sprintf("SELECT u.id, %s AS email, %s AS phone FROM %s.users u %s",
 		tokenExpr(e, emailCol("u.email"), pads), tokenExpr(e, phoneCol("u.phone"), pads), benchSchema, keyJoin)

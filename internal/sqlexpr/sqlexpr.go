@@ -31,17 +31,20 @@ type Pads struct {
 	OPad string
 }
 
-// KeyJoin returns the FROM-clause fragment that joins the one-row key table
-// into a masked view, and the pad expressions to use with it. The key table
-// must have a primary key column id constrained to 1, so it holds at most
-// one row; with no row the view returns nothing.
+// KeySource returns how a masked view reads the one-row key table: a
+// fragment to append to the view's FROM clause (possibly empty) and the pad
+// expressions to pass to Token. The key table must have a primary key column
+// id constrained to 1, so it holds at most one row.
 //
-// The fragment differs by engine because each planner needs a different shape
-// to stay fast:
-//   - Postgres: CROSS JOIN. Scalar subqueries for the pads would make the
-//     query ineligible for parallel workers (about 2.5x slower on a 4-core
-//     full scan); a cross join with a one-row table keeps parallel scans and
-//     hash joins between masked views.
+// The shape differs by engine because each planner needs a different one to
+// stay fast (measured on 10M rows, see bench/README.md):
+//   - Postgres: uncorrelated scalar subqueries, no join. They become
+//     InitPlans evaluated once and passed to parallel workers, and the plan
+//     does not depend on the key table's statistics. A CROSS JOIN with the
+//     analyzed one-row table makes the planner put the key table on the outer
+//     side of a nested loop, which cannot run in parallel. Views must not use
+//     security_barrier unless they filter rows: it stops the view from being
+//     flattened and also disables parallel workers.
 //   - MySQL: JOIN ... ON id = 1. The primary-key lookup makes the key table a
 //     "const" table, read once at planning time, so token expressions depend
 //     on one base table only. Views stay mergeable and two masked views can
@@ -52,13 +55,16 @@ type Pads struct {
 //     has privileges on the underlying tables, including the key table, even
 //     with SHOW VIEW (verified on 8.0.46). Agent roles must never be granted
 //     anything on the key table.
-func KeyJoin(e Engine, table, alias string) (string, Pads, error) {
-	p := Pads{IPad: alias + ".ipad", OPad: alias + ".opad"}
+func KeySource(e Engine, table, alias string) (from string, p Pads, err error) {
 	switch e {
 	case Postgres:
-		return fmt.Sprintf("CROSS JOIN %s %s", table, alias), p, nil
+		return "", Pads{
+			IPad: fmt.Sprintf("(SELECT ipad FROM %s)", table),
+			OPad: fmt.Sprintf("(SELECT opad FROM %s)", table),
+		}, nil
 	case MySQL:
-		return fmt.Sprintf("JOIN %s %s ON %s.id = 1", table, alias, alias), p, nil
+		return fmt.Sprintf("JOIN %s %s ON %s.id = 1", table, alias, alias),
+			Pads{IPad: alias + ".ipad", OPad: alias + ".opad"}, nil
 	}
 	return "", Pads{}, fmt.Errorf("unknown engine %q", e)
 }

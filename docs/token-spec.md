@@ -62,12 +62,14 @@ This is standard HMAC (RFC 2104), so the output equals `crypto/hmac`, `pgcrypto`
 
 The pads are key material. They live in a one-row table, `maskplan_internal.key_material (id, ipad, opad)` with `id` constrained to 1, that agent roles cannot read. Views join it with the view owner's rights. Pads never appear as literals in SQL, because Postgres exposes every view definition through `pg_views` and every function body through `pg_proc`, and MySQL writes view DDL to the binary log.
 
-How a view joins the key table depends on the engine, because each planner needs a different shape to stay fast (`sqlexpr.KeyJoin`):
+How a view reads the key table depends on the engine, because each planner needs a different shape to stay fast (`sqlexpr.KeySource`; measurements in `bench/README.md`):
 
-| Engine | Join | Why |
+| Engine | Pads read as | Why |
 | --- | --- | --- |
-| Postgres | `CROSS JOIN maskplan_internal.key_material k` | Keeps parallel scans. Scalar subqueries for the pads make a query ineligible for parallel workers. |
+| Postgres | `(SELECT ipad FROM maskplan_internal.key_material)`, likewise `opad` | Uncorrelated scalar subqueries become InitPlans, evaluated once and passed to parallel workers, and the plan does not depend on the key table's statistics. A `CROSS JOIN` with the analyzed one-row table puts the key table on the outer side of a nested loop, which cannot run in parallel. |
 | MySQL | `JOIN maskplan_internal.key_material k ON k.id = 1` | The primary-key lookup makes the key table a const table, read once at planning time. Views stay mergeable and two masked views hash-join on a token. A plain `CROSS JOIN` prevents the hash join; scalar subqueries make the view unmergeable, so MySQL materializes it in full. |
+
+On Postgres, column-masking views are created without `security_barrier`. The option stops a view from being flattened into the outer query, which disables parallel workers (2.6x slower on a 10M-row scan). It protects row filters: without it, a function in the agent's `WHERE` clause could run on rows the view's own `WHERE` would remove. A view that only masks columns removes no rows, and the outer query can reference only its token columns, so such a function only ever sees tokens. Views that apply a row filter keep `security_barrier` and pay the cost.
 
 Because MySQL substitutes const-table values into the plan, the pads appear in `EXPLAIN` output and in the optimizer trace for anyone allowed to see those. Checked on MySQL 8.0.46 with a role holding only `SELECT` on a masked view:
 
