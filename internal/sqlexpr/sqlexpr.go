@@ -12,7 +12,6 @@ package sqlexpr
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/chauhanprateek89/maskplan/internal/token"
 )
@@ -63,9 +62,14 @@ func Normalize(e Engine, c Column) (string, error) {
 		case token.Trim:
 			return trimmed, nil
 		case token.Email:
-			return fmt.Sprintf("translate(%s, '%s', '%s')", trimmed, upper, strings.ToLower(upper)), nil
+			// Under the "C" collation lower() maps ASCII A-Z only, which is the
+			// spec, and is much faster than translate().
+			return fmt.Sprintf(`lower(%s COLLATE "C")`, trimmed), nil
 		case token.Phone:
-			return fmt.Sprintf("regexp_replace(%s, '[^0-9]', '', 'g')", v), nil
+			// The inner translate() deletes the ASCII digits, leaving the set of
+			// every other character; the outer one deletes that set. About twice
+			// as fast as regexp_replace(v, '[^0-9]', '', 'g').
+			return fmt.Sprintf("translate(%s, translate(%s, '0123456789', ''), '')", v, v), nil
 		}
 	case MySQL:
 		// Columns can have any character set and collation. Converting to
@@ -81,13 +85,15 @@ func Normalize(e Engine, c Column) (string, error) {
 		case token.Trim:
 			return trimmed, nil
 		case token.Email:
-			// MySQL has no translate(); REPLACE() is case-sensitive, so 26 nested
-			// calls lowercase exactly ASCII A-Z and nothing else.
-			out := trimmed
+			// For a pure-ASCII value (byte length equals character length)
+			// LOWER() under utf8mb4_bin is exactly ASCII lowercasing. Other
+			// values take 26 nested REPLACE() calls, which are case-sensitive
+			// and so lowercase A-Z and nothing else, but are slower.
+			chain := trimmed
 			for i := 0; i < len(upper); i++ {
-				out = fmt.Sprintf("REPLACE(%s, '%c', '%c')", out, upper[i], upper[i]+('a'-'A'))
+				chain = fmt.Sprintf("REPLACE(%s, '%c', '%c')", chain, upper[i], upper[i]+('a'-'A'))
 			}
-			return out, nil
+			return fmt.Sprintf("IF(LENGTH(%s) = CHAR_LENGTH(%s), LOWER(%s), %s)", v, v, trimmed, chain), nil
 		case token.Phone:
 			return fmt.Sprintf("REGEXP_REPLACE(%s, '[^0-9]', '')", v), nil
 		}
@@ -97,9 +103,10 @@ func Normalize(e Engine, c Column) (string, error) {
 	return "", fmt.Errorf("unknown normalizer %q", c.Normalizer)
 }
 
-// MACHex returns the SQL expression for the lowercase hex HMAC-SHA256 of
-// label ':' normalized value, using the pads in p.
-func MACHex(e Engine, c Column, p Pads) (string, error) {
+// mac returns the SQL expression for HMAC-SHA256 of label ':' normalized
+// value: raw bytes (bytea) on Postgres, lowercase hex on MySQL, where SHA2()
+// only returns hex.
+func mac(e Engine, c Column, p Pads) (string, error) {
 	norm, err := Normalize(e, c)
 	if err != nil {
 		return "", err
@@ -108,7 +115,7 @@ func MACHex(e Engine, c Column, p Pads) (string, error) {
 	switch e {
 	case Postgres:
 		msg := fmt.Sprintf("convert_to('%s:' || %s, 'UTF8')", c.Label, norm)
-		return fmt.Sprintf("encode(sha256(%s || sha256(%s || %s)), 'hex')", p.OPad, p.IPad, msg), nil
+		return fmt.Sprintf("sha256(%s || sha256(%s || %s))", p.OPad, p.IPad, msg), nil
 	case MySQL:
 		msg := fmt.Sprintf("CONVERT(CONCAT('%s:', %s) USING utf8mb4)", c.Label, norm)
 		return fmt.Sprintf("SHA2(CONCAT(%s, UNHEX(SHA2(CONCAT(%s, %s), 256))), 256)", p.OPad, p.IPad, msg), nil
@@ -119,15 +126,16 @@ func MACHex(e Engine, c Column, p Pads) (string, error) {
 // Token returns the SQL expression for the token of c: "tok_" followed by
 // the first 16 hex characters of the MAC. NULL input yields NULL.
 func Token(e Engine, c Column, p Pads) (string, error) {
-	mac, err := MACHex(e, c, p)
+	m, err := mac(e, c, p)
 	if err != nil {
 		return "", err
 	}
 	switch e {
 	case Postgres:
-		return fmt.Sprintf("'%s' || left(%s, %d)", token.Prefix, mac, token.TokenHexLen), nil
+		// Hex-encode only the bytes the token keeps.
+		return fmt.Sprintf("'%s' || encode(substring(%s from 1 for %d), 'hex')", token.Prefix, m, token.TokenHexLen/2), nil
 	case MySQL:
-		return fmt.Sprintf("CONCAT('%s', LEFT(%s, %d))", token.Prefix, mac, token.TokenHexLen), nil
+		return fmt.Sprintf("CONCAT('%s', LEFT(%s, %d))", token.Prefix, m, token.TokenHexLen), nil
 	}
 	return "", fmt.Errorf("unknown engine %q", e)
 }
@@ -138,15 +146,15 @@ func FakeIndex(e Engine, c Column, p Pads, size int) (string, error) {
 	if size <= 0 {
 		return "", fmt.Errorf("dictionary size must be positive, got %d", size)
 	}
-	mac, err := MACHex(e, c, p)
+	m, err := mac(e, c, p)
 	if err != nil {
 		return "", err
 	}
 	switch e {
 	case Postgres:
-		return fmt.Sprintf("((('x' || left(%s, 8))::bit(32)::int & 2147483647) %% %d)", mac, size), nil
+		return fmt.Sprintf("((('x' || encode(substring(%s from 1 for 4), 'hex'))::bit(32)::int & 2147483647) %% %d)", m, size), nil
 	case MySQL:
-		return fmt.Sprintf("((CONV(LEFT(%s, 8), 16, 10) & 2147483647) %% %d)", mac, size), nil
+		return fmt.Sprintf("((CONV(LEFT(%s, 8), 16, 10) & 2147483647) %% %d)", m, size), nil
 	}
 	return "", fmt.Errorf("unknown engine %q", e)
 }

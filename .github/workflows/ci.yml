@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Vectors match an independent implementation
+        run: python3 scripts/check_vectors.py
+
+  postgres:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["13", "14", "15", "16", "17"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.version }}
+        env:
+          POSTGRES_USER: maskplan
+          POSTGRES_PASSWORD: maskplan
+          POSTGRES_DB: maskplan
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U maskplan"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DSN: postgres://maskplan:maskplan@localhost:5432/maskplan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vectors on Postgres ${{ matrix.version }}
+        run: MASKPLAN_TEST_POSTGRES_DSN="$DSN" go test ./internal/sqlexpr/ -run Postgres -v -count=1
+      - name: Benchmark smoke test (100k rows; numbers not meaningful on CI)
+        run: go run ./bench -engine postgres -dsn "$DSN" -rows 100000 -runs 1
+
+  mysql:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["8.0", "8.4"]
+    services:
+      mysql:
+        image: mysql:${{ matrix.version }}
+        env:
+          MYSQL_ROOT_PASSWORD: maskplan
+          MYSQL_DATABASE: maskplan
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pmaskplan"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      DSN: root:maskplan@tcp(127.0.0.1:3306)/maskplan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vectors on MySQL ${{ matrix.version }}
+        run: MASKPLAN_TEST_MYSQL_DSN="$DSN" go test ./internal/sqlexpr/ -run MySQL -v -count=1
+      - name: Benchmark smoke test (100k rows; numbers not meaningful on CI)
+        run: go run ./bench -engine mysql -dsn "$DSN" -rows 100000 -runs 1

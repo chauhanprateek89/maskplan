@@ -42,8 +42,9 @@ func TestMySQLEmailReplacesAllASCIILetters(t *testing.T) {
 			t.Errorf("missing REPLACE for %c", c)
 		}
 	}
-	if n := strings.Count(expr, "REPLACE("); n != 26+1 { // 26 REPLACE + 1 REGEXP_REPLACE
-		t.Errorf("got %d REPLACE( occurrences, want 27", n)
+	// 26 REPLACE in the non-ASCII branch, plus one REGEXP_REPLACE (trim) in each branch.
+	if n := strings.Count(expr, "REPLACE("); n != 26+2 {
+		t.Errorf("got %d REPLACE( occurrences, want 28", n)
 	}
 }
 
