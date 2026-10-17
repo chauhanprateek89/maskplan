@@ -118,7 +118,7 @@ The key table must hold exactly one row. If it is empty, nothing fails loudly: o
 
 ### Materialized token columns (design note)
 
-A token lookup (`WHERE email = 'tok_...'`) hashes every row, because tokens have no index: about 16 s on 10M rows on Postgres (see `bench/README.md`). The fix is a stored, indexed `*_tok` column, and its shape is constrained by the same rule as the views, that no key bytes may appear in SQL text:
+A token lookup (`WHERE email = 'tok_...'`) hashes every row, because tokens have no index: 6.7 s on 10M rows on Postgres with two parallel workers, 25 s on MySQL, against 0.2 ms on an indexed raw column (see `bench/README.md`). The fix is a stored, indexed `*_tok` column, and its shape is constrained by the same rule as the views, that no key bytes may appear in SQL text:
 
 - A generated column cannot read another table, so it cannot read the key table.
 - A function with the key embedded would expose it through `pg_proc` (Postgres) or the binary log (MySQL).

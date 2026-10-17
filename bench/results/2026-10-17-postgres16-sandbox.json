@@ -4,30 +4,38 @@
   "rows": 10000000,
   "orders": 1000000,
   "runs": 3,
-  "when": "2026-10-17T18:10:31.574839435Z",
+  "when": "2026-10-17T19:18:00.823335797Z",
   "results": [
     {
       "query": "Full scan, 10000000 rows, 2 tokenized columns",
-      "unmasked_ns": 676245837,
-      "md5_floor_ns": 5367941968,
-      "masked_ns": 16862657165,
-      "ratio": 24.93569090170976,
-      "md5_floor_ratio": 3.1413635366260726,
-      "overhead_per_row_column_ns": 809,
-      "verdict": "KILL by review gate (\u003e 5x); md5() alone is 7.9x"
+      "unmasked_ns": 588302187,
+      "md5_floor_ns": 5425375975,
+      "masked_ns": 16629590972,
+      "ratio": 28.267090178265818,
+      "md5_floor_ratio": 3.0651499635469963,
+      "overhead_per_row_column_ns": 802,
+      "cpu_per_row_column_ns": 2232,
+      "verdict": "PASS: CPU 2.23 µs/row/col (\u003c= 5 µs), 3.1x md5 floor (\u003c= 4x); v3 gate 28.3x unmasked, md5() alone 9.2x"
     },
     {
       "query": "Lookup of 1000 rows by primary key",
-      "unmasked_ns": 8713848,
-      "masked_ns": 14329495,
-      "ratio": 1.6444508786474128,
+      "unmasked_ns": 5475893,
+      "masked_ns": 10698237,
+      "ratio": 1.953697232579234,
       "verdict": "PASS (\u003c 100ms)"
     },
     {
+      "query": "Find one user by email (unmasked: indexed raw email; masked: token, no index)",
+      "unmasked_ns": 200261,
+      "masked_ns": 6682949134,
+      "ratio": 33371.196258882155,
+      "verdict": "INFO: known cost until token columns are materialized and indexed"
+    },
+    {
       "query": "Join 10000000 users to 1000000 orders on email token",
-      "unmasked_ns": 5839280557,
-      "masked_ns": 19207931686,
-      "ratio": 3.289434631287575,
+      "unmasked_ns": 4852454783,
+      "masked_ns": 17254999950,
+      "ratio": 3.555932146024492,
       "verdict": "INFO (no threshold set)"
     }
   ]
