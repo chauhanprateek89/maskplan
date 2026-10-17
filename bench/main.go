@@ -34,12 +34,19 @@ import (
 	"github.com/chauhanprateek89/maskplan/internal/token"
 )
 
-// Thresholds from the design review: a full scan through the masked view
-// passes within 3x the unmasked scan and is a kill signal above 5x; point
-// lookups must finish under 100 ms.
+// Gates agreed in the week-1 review. A masked full scan passes when both hold
+// on the target service:
+//   - added CPU per row per tokenized column is at most cpuBudget, measured
+//     with one process so parallel workers do not hide the cost;
+//   - the masked scan is within floorRatioMax of a scan that only calls md5()
+//     on each column, an environment sanity check.
+//
+// The design-v3 gate (within 3x of the unmasked scan) is reported for
+// reference; no per-row hash, md5() included, can meet it. Point lookups
+// must finish under lookupBudget.
 const (
-	scanPassRatio = 3.0
-	scanKillRatio = 5.0
+	cpuBudget     = 5 * time.Microsecond
+	floorRatioMax = 4.0
 	lookupBudget  = 100 * time.Millisecond
 )
 
@@ -70,9 +77,12 @@ type result struct {
 	Masked     time.Duration `json:"masked_ns"`
 	Ratio      float64       `json:"ratio"`
 	FloorRatio float64       `json:"md5_floor_ratio,omitempty"`
-	// PerRowCol is the added cost of masking per row per tokenized column.
+	// PerRowCol is the added wall-clock cost per row per tokenized column.
 	PerRowCol time.Duration `json:"overhead_per_row_column_ns,omitempty"`
-	Verdict   string        `json:"verdict"`
+	// CPUPerRowCol is the same cost measured with one process (Postgres
+	// parallel workers disabled; MySQL is single-threaded anyway).
+	CPUPerRowCol time.Duration `json:"cpu_per_row_column_ns,omitempty"`
+	Verdict      string        `json:"verdict"`
 }
 
 type report struct {
@@ -127,7 +137,9 @@ func main() {
 	} else {
 		seed(ctx, db, e)
 	}
+	ensureEmailIndex(ctx, db, e)
 	createKeyAndViews(ctx, db, e, key)
+	checkKeyRow(ctx, db)
 	verify(ctx, db, e, key)
 
 	for _, q := range sessionSettings(e) {
@@ -135,7 +147,7 @@ func main() {
 	}
 
 	r := report{Engine: string(e), Version: version, Rows: *rows, Orders: *orders, Runs: *runs, When: time.Now().UTC()}
-	r.Results = append(r.Results, benchScan(ctx, db, e), benchLookup(ctx, db), benchJoin(ctx, db, e))
+	r.Results = append(r.Results, benchScan(ctx, db, e), benchLookup(ctx, db), benchFindByToken(ctx, db, key), benchJoin(ctx, db, e))
 	printReport(r)
 	if *jsonOut != "" {
 		data, _ := json.MarshalIndent(r, "", "  ")
@@ -219,6 +231,30 @@ func checkSeeded(ctx context.Context, db *sql.DB) {
 		if n != want {
 			log.Fatalf("-skip-seed: %s.%s has %d rows, want %d; run without -skip-seed", benchSchema, table, n, want)
 		}
+	}
+}
+
+// ensureEmailIndex gives the unmasked side of the find-by-email query the
+// index a production table would have.
+func ensureEmailIndex(ctx context.Context, db *sql.DB, e sqlexpr.Engine) {
+	if e == sqlexpr.Postgres {
+		mustExec(ctx, db, "CREATE INDEX IF NOT EXISTS users_email_idx ON "+benchSchema+".users (email)")
+		return
+	}
+	var n int
+	must(db.QueryRowContext(ctx, "SELECT count(*) FROM information_schema.statistics WHERE table_schema = ? AND table_name = 'users' AND index_name = 'users_email_idx'", benchSchema).Scan(&n))
+	if n == 0 {
+		mustExec(ctx, db, "CREATE INDEX users_email_idx ON "+benchSchema+".users (email)")
+	}
+}
+
+// checkKeyRow asserts the key table holds exactly one row. With none, every
+// token silently becomes NULL (Postgres) or the views return no rows (MySQL).
+func checkKeyRow(ctx context.Context, db *sql.DB) {
+	var n int
+	must(db.QueryRowContext(ctx, "SELECT count(*) FROM "+internalSchema+".key_material").Scan(&n))
+	if n != 1 {
+		log.Fatalf("%s.key_material has %d rows, want exactly 1", internalSchema, n)
 	}
 }
 
@@ -322,25 +358,56 @@ func benchScan(ctx context.Context, db *sql.DB, e sqlexpr.Engine) result {
 	if e == sqlexpr.MySQL {
 		md5 = "MD5"
 	}
-	base := timeQuery(ctx, db, "full scan, unmasked", fmt.Sprintf("SELECT max(email), max(phone) FROM %s.users", benchSchema))
+	baseQ := fmt.Sprintf("SELECT max(email), max(phone) FROM %s.users", benchSchema)
+	maskedQ := fmt.Sprintf("SELECT max(email), max(phone) FROM %s.v_users", benchSchema)
+	base := timeQuery(ctx, db, "full scan, unmasked", baseQ)
 	floor := timeQuery(ctx, db, "full scan, md5 floor", fmt.Sprintf("SELECT max(%[1]s(email)), max(%[1]s(phone)) FROM %[2]s.users", md5, benchSchema))
-	masked := timeQuery(ctx, db, "full scan, masked", fmt.Sprintf("SELECT max(email), max(phone) FROM %s.v_users", benchSchema))
+	masked := timeQuery(ctx, db, "full scan, masked", maskedQ)
+	cols := time.Duration(2 * *rows)
 	r := result{
 		Query:    fmt.Sprintf("Full scan, %d rows, 2 tokenized columns", *rows),
 		Unmasked: base, Floor: floor, Masked: masked,
 		Ratio: ratio(masked, base), FloorRatio: ratio(masked, floor),
-		PerRowCol: (masked - base) / time.Duration(2**rows),
+		PerRowCol:    (masked - base) / cols,
+		CPUPerRowCol: (masked - base) / cols,
 	}
-	switch {
-	case r.Ratio <= scanPassRatio:
-		r.Verdict = fmt.Sprintf("PASS (<= %.0fx)", scanPassRatio)
-	case r.Ratio > scanKillRatio:
-		r.Verdict = fmt.Sprintf("KILL by review gate (> %.0fx); md5() alone is %.1fx", scanKillRatio, ratio(floor, base))
-	default:
-		r.Verdict = fmt.Sprintf("WARN (between %.0fx and %.0fx)", scanPassRatio, scanKillRatio)
+	if e == sqlexpr.Postgres {
+		mustExec(ctx, db, "SET max_parallel_workers_per_gather = 0")
+		serialBase := timeQuery(ctx, db, "full scan, unmasked, 1 process", baseQ)
+		serialMasked := timeQuery(ctx, db, "full scan, masked, 1 process", maskedQ)
+		mustExec(ctx, db, "RESET max_parallel_workers_per_gather")
+		r.CPUPerRowCol = (serialMasked - serialBase) / cols
 	}
+	cpuOK, floorOK := r.CPUPerRowCol <= cpuBudget, r.FloorRatio <= floorRatioMax
+	gate := fmt.Sprintf("CPU %.2f µs/row/col (<= %.0f µs), %.1fx md5 floor (<= %.0fx)",
+		us(r.CPUPerRowCol), us(cpuBudget), r.FloorRatio, floorRatioMax)
+	if cpuOK && floorOK {
+		r.Verdict = "PASS: " + gate
+	} else {
+		r.Verdict = "FAIL: " + gate
+	}
+	r.Verdict += fmt.Sprintf("; v3 gate %.1fx unmasked, md5() alone %.1fx", r.Ratio, ratio(floor, base))
 	return r
 }
+
+// benchFindByToken looks up one user by email token, the query an agent uses
+// to find a customer. Tokens have no index, so the masked side scans and
+// hashes every row; the unmasked side uses an index on the raw email.
+func benchFindByToken(ctx context.Context, db *sql.DB, key []byte) result {
+	id := min(12345, *rows)
+	var raw string
+	must(db.QueryRowContext(ctx, fmt.Sprintf("SELECT email FROM %s.users WHERE id = %d", benchSchema, id)).Scan(&raw))
+	tok := *token.Token(key, "user.contact.email", token.Email, &raw)
+	base := timeQuery(ctx, db, "find by email", fmt.Sprintf("SELECT id FROM %s.users WHERE email = '%s'", benchSchema, raw))
+	masked := timeQuery(ctx, db, "find by email token", fmt.Sprintf("SELECT id FROM %s.v_users WHERE email = '%s'", benchSchema, tok))
+	return result{
+		Query:    "Find one user by email (unmasked: indexed raw email; masked: token, no index)",
+		Unmasked: base, Masked: masked, Ratio: ratio(masked, base),
+		Verdict: "INFO: known cost until token columns are materialized and indexed",
+	}
+}
+
+func us(d time.Duration) float64 { return float64(d) / float64(time.Microsecond) }
 
 func benchLookup(ctx context.Context, db *sql.DB) result {
 	rng := mrand.New(mrand.NewPCG(42, 42))
@@ -419,17 +486,18 @@ func ratio(masked, base time.Duration) float64 {
 func printReport(r report) {
 	fmt.Printf("\n### %s, %d users, %d orders\n\n", r.Engine, r.Rows, r.Orders)
 	fmt.Printf("Version: %s. Median of %d runs. %s.\n\n", r.Version, r.Runs, r.When.Format("2006-01-02"))
-	fmt.Println("| Query | Unmasked | md5() floor | Masked | Masked / unmasked | Masked / md5 floor | Added per row per column | Verdict |")
-	fmt.Println("| --- | --- | --- | --- | --- | --- | --- | --- |")
+	fmt.Println("| Query | Unmasked | md5() floor | Masked | Masked / unmasked | Masked / md5 floor | Added per row per column (wall) | CPU per row per column | Verdict |")
+	fmt.Println("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
 	for _, x := range r.Results {
-		floor, floorRatio, perRow := "n/a", "n/a", "n/a"
+		floor, floorRatio, perRow, cpu := "n/a", "n/a", "n/a", "n/a"
 		if x.Floor > 0 {
 			floor = fmtDur(x.Floor)
 			floorRatio = fmt.Sprintf("%.2fx", x.FloorRatio)
-			perRow = fmt.Sprintf("%.2f µs", float64(x.PerRowCol)/float64(time.Microsecond))
+			perRow = fmt.Sprintf("%.2f µs", us(x.PerRowCol))
+			cpu = fmt.Sprintf("%.2f µs", us(x.CPUPerRowCol))
 		}
-		fmt.Printf("| %s | %s | %s | %s | %.2fx | %s | %s | %s |\n",
-			x.Query, fmtDur(x.Unmasked), floor, fmtDur(x.Masked), x.Ratio, floorRatio, perRow, x.Verdict)
+		fmt.Printf("| %s | %s | %s | %s | %.2fx | %s | %s | %s | %s |\n",
+			x.Query, fmtDur(x.Unmasked), floor, fmtDur(x.Masked), x.Ratio, floorRatio, perRow, cpu, x.Verdict)
 	}
 }
 

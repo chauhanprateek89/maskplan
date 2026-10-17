@@ -29,8 +29,25 @@ const (
 // Prefix is prepended to every token.
 const Prefix = "tok_"
 
-// TokenHexLen is the number of hex characters of the HMAC kept in a token.
+// TokenHexLen is the default number of hex characters of the HMAC kept in a
+// token: 64 bits. By the birthday bound, n distinct values collide with
+// probability about n^2 / 2^65: 3e-6 for 10^7 values, 3% for 10^9. A
+// collision is a false join match, so labels with very many distinct values
+// should use a longer token (see ValidateTokenHexLen).
 const TokenHexLen = 16
+
+// MaxTokenHexLen keeps the whole HMAC-SHA256 digest.
+const MaxTokenHexLen = 64
+
+// ValidateTokenHexLen reports whether n is a supported token length: an even
+// number of hex characters from TokenHexLen to MaxTokenHexLen. 24 (96 bits)
+// keeps the collision probability for 10^9 values near 6e-12.
+func ValidateTokenHexLen(n int) error {
+	if n < TokenHexLen || n > MaxTokenHexLen || n%2 != 0 {
+		return fmt.Errorf("invalid token length %d: want an even number from %d to %d", n, TokenHexLen, MaxTokenHexLen)
+	}
+	return nil
+}
 
 // blockSize is the SHA-256 block size used for HMAC key padding.
 const blockSize = 64
@@ -105,12 +122,22 @@ func MAC(key []byte, label, normalized string) []byte {
 	return m.Sum(nil)
 }
 
-// Token returns the token for v, or nil when v is nil. NULL in, NULL out.
+// Token returns the default-length token for v, or nil when v is nil. NULL
+// in, NULL out.
 func Token(key []byte, label string, n Normalizer, v *string) *string {
+	return TokenWithLength(key, label, n, v, TokenHexLen)
+}
+
+// TokenWithLength returns the token for v keeping hexLen hex characters of
+// the MAC. It panics if hexLen fails ValidateTokenHexLen.
+func TokenWithLength(key []byte, label string, n Normalizer, v *string, hexLen int) *string {
+	if err := ValidateTokenHexLen(hexLen); err != nil {
+		panic(err)
+	}
 	if v == nil {
 		return nil
 	}
-	t := Prefix + hex.EncodeToString(MAC(key, label, Normalize(n, *v)))[:TokenHexLen]
+	t := Prefix + hex.EncodeToString(MAC(key, label, Normalize(n, *v)))[:hexLen]
 	return &t
 }
 

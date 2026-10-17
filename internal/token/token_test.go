@@ -112,3 +112,21 @@ func TestValidateLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenLength(t *testing.T) {
+	key := []byte("k")
+	short := *Token(key, "user.contact.email", Email, ptr("a@b.c"))
+	long := *TokenWithLength(key, "user.contact.email", Email, ptr("a@b.c"), 24)
+	full := *TokenWithLength(key, "user.contact.email", Email, ptr("a@b.c"), MaxTokenHexLen)
+	if len(long) != len(Prefix)+24 || len(full) != len(Prefix)+64 {
+		t.Fatalf("unexpected lengths: %q %q", long, full)
+	}
+	if !strings.HasPrefix(long, short) || !strings.HasPrefix(full, long) {
+		t.Fatal("longer tokens must extend shorter ones")
+	}
+	for _, bad := range []int{0, 8, 15, 17, 66} {
+		if ValidateTokenHexLen(bad) == nil {
+			t.Errorf("length %d accepted", bad)
+		}
+	}
+}

@@ -73,6 +73,12 @@ func TestRelationships(t *testing.T) {
 			t.Errorf("%s and %s must have different tokens", p[0], p[1])
 		}
 	}
+	extends := [][2]string{{"email_ascii", "token_length_24"}, {"token_length_24", "token_length_64"}}
+	for _, p := range extends {
+		if short, long := tok(t, m, p[0]), tok(t, m, p[1]); len(long) <= len(short) || long[:len(short)] != short {
+			t.Errorf("%s must extend %s", p[1], p[0])
+		}
+	}
 	if m["null"].Token != nil || m["null"].FakeIndex != nil {
 		t.Error("null vector must have NULL outputs")
 	}

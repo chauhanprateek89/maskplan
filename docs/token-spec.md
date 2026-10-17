@@ -9,12 +9,27 @@ Tokens are pseudonyms, not anonymous data. Anyone holding the key can test a gue
 ```
 token(key, label, normalizer, value) =
     NULL                                               if value is NULL
-    "tok_" || hex(HMAC-SHA256(key, label || ":" || normalize(value)))[0:16]
+    "tok_" || hex(HMAC-SHA256(key, label || ":" || normalize(value)))[0:L]
 ```
 
-- `hex` is lowercase hexadecimal. The token keeps the first 8 bytes (16 hex characters) of the MAC.
+- `hex` is lowercase hexadecimal. `L` is the token length in hex characters: 16 (64 bits) by default, or any even number from 16 to 64, set per label. A longer token extends the shorter one: the 16-character token is a prefix of the 24-character token for the same value.
 - The message is the UTF-8 bytes of the label, a colon, and the normalized value.
 - Empty string is a value, not NULL, and gets a token.
+
+### Token length and collisions
+
+Two different values can share a truncated token, and a shared token is a false join match. By the birthday bound, n distinct values under one label collide with probability about n² / 2^(4L+1):
+
+| Distinct values | L = 16 (64 bits) | L = 24 (96 bits) |
+| --- | --- | --- |
+| 10^7 | 3 × 10^-6 | 6 × 10^-16 |
+| 10^9 | 3% | 6 × 10^-12 |
+
+Use `L = 24` for labels that can exceed about 10^8 distinct values, such as event or transaction identifiers. Changing a label's length changes every token under it, so choose it before agents depend on the tokens.
+
+### Input types
+
+Tokens are defined over text. Integer columns are hashed as their decimal text, which is identical on both engines; decimal columns include their scale (`1.0` and `1` differ). Binary columns (`bytea`, `BINARY`, `VARBINARY`, `BLOB`) are not supported in version 1: MySQL would reinterpret their bytes as `utf8mb4`, substituting or rejecting invalid sequences, and the result would not match the Go reference. `policy test` must reject a token rule on a binary column.
 
 ### Labels
 
@@ -69,7 +84,9 @@ How a view reads the key table depends on the engine, because each planner needs
 | Postgres | `(SELECT ipad FROM maskplan_internal.key_material)`, likewise `opad` | Uncorrelated scalar subqueries become InitPlans, evaluated once and passed to parallel workers, and the plan does not depend on the key table's statistics. A `CROSS JOIN` with the analyzed one-row table puts the key table on the outer side of a nested loop, which cannot run in parallel. |
 | MySQL | `JOIN maskplan_internal.key_material k ON k.id = 1` | The primary-key lookup makes the key table a const table, read once at planning time. Views stay mergeable and two masked views hash-join on a token. A plain `CROSS JOIN` prevents the hash join; scalar subqueries make the view unmergeable, so MySQL materializes it in full. |
 
-On Postgres, column-masking views are created without `security_barrier`. The option stops a view from being flattened into the outer query, which disables parallel workers (2.6x slower on a 10M-row scan). It protects row filters: without it, a function in the agent's `WHERE` clause could run on rows the view's own `WHERE` would remove. A view that only masks columns removes no rows, and the outer query can reference only its token columns, so such a function only ever sees tokens. Views that apply a row filter keep `security_barrier` and pay the cost.
+On Postgres, column-masking views are created without `security_barrier`. The option stops a view from being flattened into the outer query, so aggregates and joins cannot be pushed into parallel workers: every row would cross the Gather, and at real costs the planner chooses a serial plan instead (2.6x slower on a 10M-row scan). It protects row filters: without it, a function in the agent's `WHERE` clause could run on rows the view's own `WHERE` would remove. A view that only masks columns removes no rows, and the outer query can reference only its token and passthrough columns, so such a function never sees a raw masked value. Views that apply a row filter keep `security_barrier` and pay the cost.
+
+Both claims are regression-tested on every CI matrix version (`internal/sqlexpr/plan_test.go`): a `plpgsql` function that reports every argument it receives, called in the `WHERE` clause of a column-only view, never sees a raw email; called on a row-filtered view, it never sees a filtered-out row. The same file asserts the plan shapes the performance depends on: on Postgres a partial aggregate in parallel workers with the pads read by InitPlans and the key table never the outer side of a nested loop; on MySQL a `const` access to the key table, merged views, and a hash join between two masked views.
 
 Because MySQL substitutes const-table values into the plan, the pads appear in `EXPLAIN` output and in the optimizer trace for anyone allowed to see those. Checked on MySQL 8.0.46 with a role holding only `SELECT` on a masked view:
 
@@ -86,6 +103,28 @@ Granting `SHOW VIEW` as well still leaves `EXPLAIN` and the trace denied; `SHOW 
 
 Rotating the key rewrites the key table. Tokens made with the old key no longer match, by design.
 
+### Key table invariants
+
+The key table must hold exactly one row. If it is empty, nothing fails loudly: on Postgres the scalar subqueries return NULL and every token is NULL; on MySQL the join finds no key row and the views return no rows. Both fail safe (no raw data, token joins match nothing) but are invisible, so:
+
+- `apply` asserts exactly one key row after writing it, and refuses to finish otherwise.
+- `report` verifies the key table of every source it inspects and flags an empty or multi-row table.
+- Tests pin the empty-table behavior on both engines (`TestEmptyKeyTable*`), so a change in it is noticed.
+
+### Preflight requirements
+
+- **Postgres `server_encoding` must be `UTF8`.** Under `SQL_ASCII`, `convert_to(..., 'UTF8')` does not convert: stored bytes are hashed as they are, may not be UTF-8, and would not match Go. `preflight` refuses to compile tokens for such a database.
+- **No binary columns under a token rule** (see Input types).
+
+### Materialized token columns (design note)
+
+A token lookup (`WHERE email = 'tok_...'`) hashes every row, because tokens have no index: about 16 s on 10M rows on Postgres (see `bench/README.md`). The fix is a stored, indexed `*_tok` column, and its shape is constrained by the same rule as the views, that no key bytes may appear in SQL text:
+
+- A generated column cannot read another table, so it cannot read the key table.
+- A function with the key embedded would expose it through `pg_proc` (Postgres) or the binary log (MySQL).
+
+The viable shape is a trigger. The trigger function is owned by the key-table owner, reads `maskplan_internal.key_material` at runtime and writes the token into `email_tok` on insert and update. On Postgres it is `SECURITY DEFINER` with `EXECUTE` revoked from `PUBLIC`; trigger functions cannot be called directly, so it is not a hashing oracle. On MySQL triggers run with their definer's rights by default. The view then selects `email_tok` instead of computing the token, and an index on `email_tok` makes lookups and joins index-backed. Costs: writes pay for one HMAC per tokenized column, the base table grows by one column per token, and key rotation must rewrite every token column.
+
 ## SQL implementations
 
 Generated by `internal/sqlexpr`; shown here for value expression `v`, label `user.contact.email` and pad expressions `IPAD`, `OPAD`.
@@ -98,7 +137,7 @@ Generated by `internal/sqlexpr`; shown here for value expression `v`, label `use
 | email | `lower(<trim> COLLATE "C")`; under the `C` collation `lower()` maps ASCII only |
 | phone | `translate(t, translate(t, '0123456789', ''), '')` where `t` is `(v)::text` |
 | MAC | `sha256(OPAD \|\| sha256(IPAD \|\| convert_to('user.contact.email:' \|\| <norm>, 'UTF8')))` |
-| token | `'tok_' \|\| encode(substring(<MAC> from 1 for 8), 'hex')` |
+| token | `'tok_' \|\| encode(substring(<MAC> from 1 for L/2), 'hex')` (L/2 bytes for L hex characters) |
 
 `convert_to(..., 'UTF8')` hashes UTF-8 bytes whatever the server encoding is.
 
@@ -111,12 +150,12 @@ Generated by `internal/sqlexpr`; shown here for value expression `v`, label `use
 | email | `IF(LENGTH(<value>) = CHAR_LENGTH(<value>), LOWER(<trim>), <26 nested REPLACE>)`. For pure-ASCII values `LOWER()` is exactly ASCII lowercasing; other values use case-sensitive `REPLACE()` for `A`–`Z` only |
 | phone | `REGEXP_REPLACE(<value>, '[^0-9]', '')` |
 | MAC (hex) | `SHA2(CONCAT(OPAD, UNHEX(SHA2(CONCAT(IPAD, CONVERT(CONCAT('user.contact.email:', <norm>) USING utf8mb4)), 256))), 256)` |
-| token | `CONCAT('tok_', LEFT(<MAC>, 16))` |
+| token | `CONCAT('tok_', LEFT(<MAC>, L))` |
 
 ## Conformance
 
-`testdata/vectors.json` holds the shared vectors: label, normalizer, input (a JSON string, so whitespace and Unicode are unambiguous, or `null`), key (hex), expected token and expected fake index for a 4096-entry dictionary. The file is generated from the Go reference (`go run ./cmd/genvectors`) and is checked independently by `scripts/check_vectors.py`, which uses Python's `hmac` module and shares no code with the Go reference.
+`testdata/vectors.json` holds the shared vectors: label, normalizer, token length, input (a JSON string, so whitespace and Unicode are unambiguous, or `null`), key (hex), expected token and expected fake index for a 4096-entry dictionary. The file is generated from the Go reference (`go run ./cmd/genvectors`) and is checked independently by `scripts/check_vectors.py`, which uses Python's `hmac` module and shares no code with the Go reference.
 
 An implementation conforms if it reproduces every vector exactly. CI checks Go on every commit, and the generated SQL on Postgres 13, 14, 15, 16 and 17 and MySQL 8.0 and 8.4.
 
-Changing anything in this document that changes a token requires a new spec version and regenerated vectors.
+`testdata/vectors.json` is frozen at the `spec-v1` tag. Changing anything in this document that changes a token requires a new spec version and a new vectors file; the Python check fails on any drift between the file and the spec.

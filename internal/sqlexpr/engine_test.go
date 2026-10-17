@@ -179,7 +179,7 @@ func runVectors(t *testing.T, e Engine) {
 	pads := Pads{IPad: "k.ipad", OPad: "k.opad"}
 	for i, v := range f.Vectors {
 		t.Run(v.Name, func(t *testing.T) {
-			col := Column{Expr: "v.input", Label: v.Label, Normalizer: v.Normalizer}
+			col := Column{Expr: "v.input", Label: v.Label, Normalizer: v.Normalizer, TokenHexLen: v.TokenHexLen}
 			tokExpr, err := Token(e, col, pads)
 			if err != nil {
 				t.Fatal(err)

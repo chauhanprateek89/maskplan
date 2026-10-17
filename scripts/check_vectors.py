@@ -37,7 +37,7 @@ def main(path):
         else:
             message = (v["label"] + ":" + normalize(v["normalizer"], v["input"])).encode("utf-8")
             mac = hmac.new(bytes.fromhex(v["key"]), message, hashlib.sha256).digest()
-            want_token = "tok_" + mac.hex()[:16]
+            want_token = "tok_" + mac.hex()[: v["token_hex_len"]]
             want_index = (int.from_bytes(mac[:4], "big") & 0x7FFFFFFF) % size
         if (v["token"], v["fake_index"]) != (want_token, want_index):
             failures += 1

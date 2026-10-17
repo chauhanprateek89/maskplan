@@ -26,18 +26,22 @@ type Case struct {
 	Input      *string // nil means SQL NULL
 	Key        []byte
 	Note       string
+	// TokenHexLen is the token length in hex characters; zero means
+	// token.TokenHexLen.
+	TokenHexLen int
 }
 
 // Vector is a Case together with its expected outputs, as stored in JSON.
 type Vector struct {
-	Name       string           `json:"name"`
-	Note       string           `json:"note,omitempty"`
-	Label      string           `json:"label"`
-	Normalizer token.Normalizer `json:"normalizer"`
-	Input      *string          `json:"input"`
-	Key        string           `json:"key"`
-	Token      *string          `json:"token"`
-	FakeIndex  *int             `json:"fake_index"`
+	Name        string           `json:"name"`
+	Note        string           `json:"note,omitempty"`
+	Label       string           `json:"label"`
+	Normalizer  token.Normalizer `json:"normalizer"`
+	Input       *string          `json:"input"`
+	Key         string           `json:"key"`
+	TokenHexLen int              `json:"token_hex_len"`
+	Token       *string          `json:"token"`
+	FakeIndex   *int             `json:"fake_index"`
 }
 
 // File is the layout of testdata/vectors.json.
@@ -124,21 +128,30 @@ var Cases = []Case{
 		Note: "64-byte key: used as is"},
 	{Name: "key_longer_than_block", Label: email, Normalizer: token.Email, Input: s("Alice@Example.com"), Key: keyLong,
 		Note: "100-byte key: hashed to 32 bytes before padding"},
+	{Name: "token_length_24", Label: email, Normalizer: token.Email, Input: s("Alice@Example.com"), Key: key1, TokenHexLen: 24,
+		Note: "96-bit token; must extend the email_ascii token"},
+	{Name: "token_length_64", Label: email, Normalizer: token.Email, Input: s("Alice@Example.com"), Key: key1, TokenHexLen: 64,
+		Note: "whole digest; must extend token_length_24"},
 }
 
 // Generate computes the expected outputs for every case with package token.
 func Generate() File {
 	f := File{SpecVersion: SpecVersion, FakeDictionarySize: FakeDictionarySize}
 	for _, c := range Cases {
+		hexLen := c.TokenHexLen
+		if hexLen == 0 {
+			hexLen = token.TokenHexLen
+		}
 		f.Vectors = append(f.Vectors, Vector{
-			Name:       c.Name,
-			Note:       c.Note,
-			Label:      c.Label,
-			Normalizer: c.Normalizer,
-			Input:      c.Input,
-			Key:        hex.EncodeToString(c.Key),
-			Token:      token.Token(c.Key, c.Label, c.Normalizer, c.Input),
-			FakeIndex:  token.FakeIndex(c.Key, c.Label, c.Normalizer, c.Input, FakeDictionarySize),
+			Name:        c.Name,
+			Note:        c.Note,
+			Label:       c.Label,
+			Normalizer:  c.Normalizer,
+			Input:       c.Input,
+			Key:         hex.EncodeToString(c.Key),
+			TokenHexLen: hexLen,
+			Token:       token.TokenWithLength(c.Key, c.Label, c.Normalizer, c.Input, hexLen),
+			FakeIndex:   token.FakeIndex(c.Key, c.Label, c.Normalizer, c.Input, FakeDictionarySize),
 		})
 	}
 	return f

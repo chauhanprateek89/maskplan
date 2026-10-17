@@ -44,7 +44,9 @@ type Pads struct {
 //     analyzed one-row table makes the planner put the key table on the outer
 //     side of a nested loop, which cannot run in parallel. Views must not use
 //     security_barrier unless they filter rows: it stops the view from being
-//     flattened and also disables parallel workers.
+//     flattened, so aggregates cannot be split into partial aggregates in the
+//     workers; every row crosses the Gather and at real costs the planner
+//     chooses a serial plan instead.
 //   - MySQL: JOIN ... ON id = 1. The primary-key lookup makes the key table a
 //     "const" table, read once at planning time, so token expressions depend
 //     on one base table only. Views stay mergeable and two masked views can
@@ -75,13 +77,29 @@ type Column struct {
 	Expr       string
 	Label      string
 	Normalizer token.Normalizer
+	// TokenHexLen is the number of hex characters kept in the token; zero
+	// means token.TokenHexLen (16). Use a longer token for labels with very
+	// many distinct values; see token.TokenHexLen for the collision bound.
+	TokenHexLen int
 }
 
 func (c Column) validate() error {
 	if err := token.ValidateLabel(c.Label); err != nil {
 		return err
 	}
+	if c.TokenHexLen != 0 {
+		if err := token.ValidateTokenHexLen(c.TokenHexLen); err != nil {
+			return err
+		}
+	}
 	return token.ValidateNormalizer(c.Normalizer)
+}
+
+func (c Column) hexLen() int {
+	if c.TokenHexLen == 0 {
+		return token.TokenHexLen
+	}
+	return c.TokenHexLen
 }
 
 const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -162,7 +180,8 @@ func mac(e Engine, c Column, p Pads) (string, error) {
 }
 
 // Token returns the SQL expression for the token of c: "tok_" followed by
-// the first 16 hex characters of the MAC. NULL input yields NULL.
+// the first c.TokenHexLen (default 16) hex characters of the MAC. NULL input
+// yields NULL.
 func Token(e Engine, c Column, p Pads) (string, error) {
 	m, err := mac(e, c, p)
 	if err != nil {
@@ -171,9 +190,9 @@ func Token(e Engine, c Column, p Pads) (string, error) {
 	switch e {
 	case Postgres:
 		// Hex-encode only the bytes the token keeps.
-		return fmt.Sprintf("'%s' || encode(substring(%s from 1 for %d), 'hex')", token.Prefix, m, token.TokenHexLen/2), nil
+		return fmt.Sprintf("'%s' || encode(substring(%s from 1 for %d), 'hex')", token.Prefix, m, c.hexLen()/2), nil
 	case MySQL:
-		return fmt.Sprintf("CONCAT('%s', LEFT(%s, %d))", token.Prefix, m, token.TokenHexLen), nil
+		return fmt.Sprintf("CONCAT('%s', LEFT(%s, %d))", token.Prefix, m, c.hexLen()), nil
 	}
 	return "", fmt.Errorf("unknown engine %q", e)
 }
