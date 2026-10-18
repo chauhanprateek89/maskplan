@@ -328,6 +328,21 @@ func TestReportMySQL(t *testing.T) {
 
 	// A key written into a view definition fails every account, as on
 	// Postgres, so it gets its own subtest.
+	t.Run("expressions shown", func(t *testing.T) {
+		r, err := MySQL(context.Background(), db, "mpt_sneaky@%", myClassification(), Options{Schemas: []string{"mpt_data", "mpt_views", "mpt_masked", "mpt_fn", "mpt_sneaky"}, InternalSchema: "mpt_internal", ShowExpressions: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		shown := false
+		for _, f := range r.Findings {
+			noSecrets(t, f)
+			shown = shown || strings.Contains(f.Path, "concat('tok_'")
+		}
+		if !shown {
+			t.Errorf("no expression shown with ShowExpressions\n%s", dump(r))
+		}
+	})
+
 	t.Run("key literal in a view", func(t *testing.T) {
 		ipad, opad := token.Pads(testKey)
 		e, err := sqlexpr.Token(sqlexpr.MySQL, sqlexpr.Column{Expr: "c.email", Label: classify.Email, Normalizer: token.Email},

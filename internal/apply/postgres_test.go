@@ -148,7 +148,7 @@ func TestApplyPostgres(t *testing.T) {
 				"maskplan token of mpa_app.users.phone", "maskplan fake_email of mpa_app.tickets.requester_email")
 		}
 		check(t, "mpa_support", false, true, "maskplan fake_email of mpa_app.tickets.requester_email",
-			"WARN      view mpa_support.tickets", "shows only rows where (b.tenant_id = 1); not checked against a policy")
+			"WARN      view mpa_support.tickets", "shows only rows where <expression hidden; --show-expressions shows it>; not checked against a policy")
 		check(t, "mpa_support", true, true, "maskplan fake_email of mpa_app.tickets.requester_email")
 	})
 

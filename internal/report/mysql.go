@@ -134,6 +134,8 @@ type myTableGrant struct {
 	privileges string
 }
 
+func (s *myState) expr(x string) string { return showExpr(s.opts.ShowExpressions, dialectMySQL, x) }
+
 func (s *myState) add(f Finding) { s.report.Findings = append(s.report.Findings, f) }
 
 // via describes how the target uses a.
@@ -1054,7 +1056,7 @@ func (s *myState) viewFindings() error {
 		// rewrite holds values from constant tables, data and key alike.
 		short := ""
 		if exprs, _, err := s.viewDefinition(c[0], c[1]); err == nil && exprs != nil {
-			short = printableExpr(exprs[c[2]])
+			short = s.expr(exprs[c[2]])
 		}
 		type ref struct {
 			base         [2]string

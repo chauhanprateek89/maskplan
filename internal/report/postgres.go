@@ -33,7 +33,12 @@ type Options struct {
 	// the inspecting user; the inspecting user must be able to SET ROLE to
 	// it. Postgres only.
 	AsRole bool
+	// ShowExpressions prints view expressions in findings, with long
+	// literals replaced; by default findings show none.
+	ShowExpressions bool
 }
+
+func (s *pgState) expr(x string) string { return showExpr(s.opts.ShowExpressions, dialectPostgres, x) }
 
 func (o Options) internal() string {
 	if o.InternalSchema == "" {
@@ -1027,7 +1032,7 @@ func (s *pgState) viewFindings() error {
 				unlabeled = append(unlabeled, r)
 			}
 		}
-		short := printableExpr(expr)
+		short := s.expr(expr)
 		passthrough := len(pii) == 1 && len(refs) == 1 && trimParens(expr) == pii[0].raw
 		var rec *recognized
 		if !passthrough {
@@ -1103,7 +1108,7 @@ func (s *pgState) conditionFindings() error {
 				if l, ok := s.label(base[0].schema, base[0].name, col); ok && l.IsPII() {
 					s.add(Finding{Status: Unknown, Object: "view " + k, Label: l.Label,
 						Path: fmt.Sprintf("its condition %s reads %s.%s.%s raw for every row, whatever the role selects; errors and functions in it can pass the value on%s",
-							printableExpr(c), base[0].schema, base[0].name, col, s.policyHint())})
+							s.expr(c), base[0].schema, base[0].name, col, s.policyHint())})
 					break conditions
 				}
 			}

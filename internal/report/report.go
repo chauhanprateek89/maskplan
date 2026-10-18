@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -34,36 +33,6 @@ const (
 	// reviewed (future tables, replication of the key table, ...).
 	Warn Status = "WARN"
 )
-
-var (
-	// sqlLiteralRe matches string literals left to right, so that each
-	// match is a real literal, not the text between two of them.
-	sqlLiteralRe = regexp.MustCompile(`'(?:[^'\\]|\\.|'')*'`)
-	hexLiteralRe = regexp.MustCompile(`0x[0-9A-Fa-f]{17,}`)
-)
-
-// redactLiterals replaces literals long enough to be key material or data
-// (over 16 characters) with '…'.
-func redactLiterals(expr string) string {
-	expr = sqlLiteralRe.ReplaceAllStringFunc(expr, func(l string) string {
-		if len(l) > 18 {
-			return "'…'"
-		}
-		return l
-	})
-	return hexLiteralRe.ReplaceAllString(expr, "0x…")
-}
-
-// printableExpr shortens an SQL expression for a finding. Findings end up in CI
-// logs and pull requests, so long literals, which can hold key pads written
-// into a view or values the optimizer folded in, are replaced by '…'.
-func printableExpr(expr string) string {
-	s := strings.Join(strings.Fields(redactLiterals(expr)), " ")
-	if len(s) > 120 {
-		s = s[:117] + "..."
-	}
-	return s
-}
 
 // severity orders findings in output and decides the exit code.
 var severity = map[Status]int{Key: 0, Raw: 1, Unknown: 2, Unlabeled: 3, Warn: 4, Masked: 5}

@@ -529,17 +529,33 @@ func TestReportPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The same key in dollar quotes, which a quote-pairing regular
+		// expression reads wrong.
+		dollar, err := sqlexpr.Token(sqlexpr.Postgres, sqlexpr.Column{Expr: "c.email", Label: classify.Email, Normalizer: token.Email},
+			sqlexpr.Pads{IPad: fmt.Sprintf(`$k$\x%x$k$::bytea`, ipad), OPad: fmt.Sprintf(`$$\x%x$$::bytea`, opad)})
+		if err != nil {
+			t.Fatal(err)
+		}
 		exec(t, conn, "CREATE VIEW mpt_sneaky.literal_key AS SELECT "+tk+" AS email FROM mpt_data.customers c",
-			"GRANT SELECT ON mpt_sneaky.literal_key TO mpt_sneaky")
-		defer exec(t, conn, "DROP VIEW mpt_sneaky.literal_key")
+			"CREATE VIEW mpt_sneaky.literal_key_dollar AS SELECT "+dollar+" AS email FROM mpt_data.customers c",
+			"GRANT SELECT ON mpt_sneaky.literal_key, mpt_sneaky.literal_key_dollar TO mpt_sneaky")
+		defer exec(t, conn, "DROP VIEW mpt_sneaky.literal_key, mpt_sneaky.literal_key_dollar")
 		for _, c := range []struct {
 			role string
+			show bool
 			want []expect
 		}{
-			{"mpt_clean", []expect{{Key, "view mpt_sneaky.literal_key", []string{"definition contains the token key material"}}}},
-			{"mpt_sneaky", []expect{{Unknown, "mpt_sneaky.literal_key.email", []string{"not a maskplan transform"}}}},
+			{"mpt_clean", false, []expect{{Key, "view mpt_sneaky.literal_key", []string{"definition contains the token key material"}},
+				{Key, "view mpt_sneaky.literal_key_dollar", []string{"definition contains the token key material"}}}},
+			{"mpt_sneaky", false, []expect{{Unknown, "mpt_sneaky.literal_key.email", []string{"not a maskplan transform: " + hiddenExpr}},
+				{Unknown, "mpt_sneaky.literal_key_dollar.email", []string{"not a maskplan transform: " + hiddenExpr}}}},
+			{"mpt_sneaky", true, []expect{{Unknown, "mpt_sneaky.literal_key.email", []string{"not a maskplan transform: ('tok_'"}},
+				{Unknown, "mpt_sneaky.literal_key_dollar.email", []string{"not a maskplan transform: ('tok_'"}}}},
 		} {
-			r := runReport(t, conn, c.role)
+			r, err := Postgres(context.Background(), conn, c.role, testClassification(), Options{Schemas: testSchemas, InternalSchema: testInternal, ShowExpressions: c.show})
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, f := range r.Findings {
 				noSecrets(t, f)
 			}
@@ -558,8 +574,6 @@ func TestReportPostgres(t *testing.T) {
 		}
 	})
 
-	// pg_stat_statements turns on compute_query_id, which adds a query
-	// identifier to EXPLAIN VERBOSE; the plan comparison must ignore it.
 	t.Run("as-role", func(t *testing.T) {
 		var version int
 		if err := conn.QueryRow(context.Background(), "SELECT current_setting('server_version_num')::int").Scan(&version); err != nil {
@@ -610,6 +624,8 @@ func TestReportPostgres(t *testing.T) {
 
 	t.Run("canonicalization never makes a perturbed token equal", func(t *testing.T) { canonicalAdversarial(t, conn) })
 
+	// pg_stat_statements turns on compute_query_id, which adds a query
+	// identifier to EXPLAIN VERBOSE; the plan comparison must ignore it.
 	t.Run("compute_query_id on", func(t *testing.T) {
 		if version < 140000 {
 			t.Skip("compute_query_id is PostgreSQL 14 and later")
