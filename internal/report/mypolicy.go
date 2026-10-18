@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -159,11 +160,12 @@ func (s *myState) policyTables(p *policy.Policy, identity string) ([]*compile.Ta
 	return compile.IdentityTables(p, s.opts.Source, identity, all)
 }
 
-// conditionFindings: a view's WHERE clause runs on base rows whatever the
-// account selects, with raw values, and a condition can hand them on in an
-// error (JSON_EXTRACT on a value that is not JSON fails with it). A WHERE
-// clause that reads a labeled column is UNKNOWN. Join conditions are not
-// checked on MySQL yet.
+// conditionFindings: a view's own conditions (WHERE and join conditions)
+// run on base rows whatever the account selects, with raw values, and a
+// condition can hand them on in an error (JSON_EXTRACT on a value that is
+// not JSON fails with it). A condition that reads a labeled column is
+// UNKNOWN. Two are maskplan's own and exempt: the key join on id = 1, and a
+// dictionary join whose index expression is the generated one.
 func (s *myState) conditionFindings() error {
 	for _, k := range sortedKeys(s.read) {
 		if s.matched[k] {
@@ -174,24 +176,95 @@ func (s *myState) conditionFindings() error {
 		if err != nil || from == nil {
 			continue
 		}
-		parts := splitTopLevel(s.viewFrom(db, view), " where ")
-		if len(parts) < 2 {
-			continue
+		fromText := s.viewFrom(db, view)
+		var conds []string
+		if parts := splitTopLevel(fromText, " where "); len(parts) > 1 {
+			conds = append(conds, parts[len(parts)-1])
+			fromText = parts[0]
 		}
-		where := parts[len(parts)-1]
-		for _, m := range my2PartRe.FindAllStringSubmatch(myLiteralRe.ReplaceAllString(where, "''"), -1) {
-			rel, ok := from[unquoteMy(m[1])]
-			if !ok {
+		keyAlias := ""
+		for alias, rel := range from {
+			if rel == [2]string{s.internal, "key_material"} {
+				keyAlias = alias
+			}
+		}
+		for _, c := range joinConditions(fromText) {
+			if keyAlias != "" && c == "("+quoteMy(keyAlias)+".`id` = 1)" {
 				continue
 			}
-			col := unquoteMy(m[2])
-			if l, ok := s.cls[classification.Key{Schema: rel[0], Table: rel[1], Column: col}]; ok && l.IsPII() {
-				s.add(Finding{Status: Unknown, Object: "view " + k, Label: l.Label,
-					Path: fmt.Sprintf("its condition %s reads %s.%s.%s raw for every row, whatever the account selects; errors in it can pass the value on",
-						printableExpr(where), rel[0], rel[1], col)})
-				break
+			if m := myFakeCondRe.FindStringSubmatch(c); m != nil {
+				if _, _, _, ok := s.fakeJoin(db, view, from, keyAlias, unquoteMy(m[1])); ok {
+					continue
+				}
+			}
+			conds = append(conds, c)
+		}
+	conditions:
+		for _, cond := range conds {
+			for _, m := range my2PartRe.FindAllStringSubmatch(myLiteralRe.ReplaceAllString(cond, "''"), -1) {
+				rel, ok := from[unquoteMy(m[1])]
+				if !ok {
+					continue
+				}
+				col := unquoteMy(m[2])
+				if l, ok := s.cls[classification.Key{Schema: rel[0], Table: rel[1], Column: col}]; ok && l.IsPII() {
+					s.add(Finding{Status: Unknown, Object: "view " + k, Label: l.Label,
+						Path: fmt.Sprintf("its condition %s reads %s.%s.%s raw for every row, whatever the account selects; errors in it can pass the value on",
+							printableExpr(cond), rel[0], rel[1], col)})
+					break conditions
+				}
 			}
 		}
 	}
 	return nil
+}
+
+// A dictionary join's condition as MySQL stores it: (`a`.`i` = ...).
+var myFakeCondRe = regexp.MustCompile("^\\(`((?:[^`]|``)+)`\\.`i` = ")
+
+// joinConditions returns the condition of every "on(...)" in a stored FROM
+// clause, outside quotes, as written.
+func joinConditions(from string) []string {
+	var out []string
+	quote := byte(0)
+	for i := 0; i < len(from); i++ {
+		c := from[i]
+		switch {
+		case quote != 0:
+			if c == '\\' && quote == '\'' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '`' || c == '"':
+			quote = c
+		case strings.HasPrefix(from[i:], " on("):
+			start := i + len(" on(")
+			depth, q := 0, byte(0)
+			for j := start; j < len(from); j++ {
+				d := from[j]
+				switch {
+				case q != 0:
+					if d == '\\' && q == '\'' {
+						j++
+					} else if d == q {
+						q = 0
+					}
+				case d == '\'' || d == '`' || d == '"':
+					q = d
+				case d == '(':
+					depth++
+				case d == ')':
+					if depth == 0 {
+						out = append(out, from[start:j])
+						i = j
+						j = len(from)
+					} else {
+						depth--
+					}
+				}
+			}
+		}
+	}
+	return out
 }

@@ -849,41 +849,18 @@ func (s *myState) recognize(db, view, col string) (*myRecognized, error) {
 	pads := sqlexpr.Pads{IPad: quoteMy(keyAlias) + ".`ipad`", OPad: quoteMy(keyAlias) + ".`opad`"}
 	if rel, ok := from[alias]; ok && rel == [2]string{s.internal, "names"} && column == "name" {
 		// fake_name, fake_email: the base column is in the dictionary
-		// join, named by its alias; the base table is the one other table.
-		c, ok := strings.CutPrefix(alias, "fake_")
-		if !ok || keyAlias == "" {
+		// join, named by its alias.
+		fakeAlias := alias
+		var label string
+		if alias, column, label, ok = s.fakeJoin(db, view, from, keyAlias, fakeAlias); !ok {
 			return nil, nil
 		}
-		fakeAlias := alias
-		alias = ""
-		for a, rel := range from {
-			if rel[0] != s.internal {
-				if alias != "" {
-					return nil, nil
-				}
-				alias = a
-			}
-		}
-		column = c
-		lab := s.cls[classification.Key{Schema: from[alias][0], Table: from[alias][1], Column: column}]
 		for _, t := range []string{policy.FakeName, policy.FakeEmail} {
-			e, j, err := compile.ColumnSQL(sqlexpr.MySQL, policy.Decision{Transform: t, Label: lab.Label}, compile.Column{Name: column}, alias, pads, s.internal)
+			e, j, err := compile.ColumnSQL(sqlexpr.MySQL, policy.Decision{Transform: t, Label: label}, compile.Column{Name: column}, alias, pads, s.internal)
 			if err != nil || !strings.Contains(j, quoteMy(fakeAlias)) {
 				return nil, nil
 			}
 			cands = append(cands, candidate{t, e, j, nil})
-		}
-		// The join must be maskplan's: compare its index expression.
-		idx, ok := fakeIndexExpr(s.viewFrom(db, view), s.internal, fakeAlias)
-		if !ok {
-			return nil, nil
-		}
-		x, err := sqlexpr.FakeIndex(sqlexpr.MySQL, sqlexpr.Column{Expr: quoteMy(alias) + "." + quoteMy(column), Label: unlabeledOr(lab.Label), Normalizer: compile.NormalizerFor(lab.Label)}, pads, compile.DictionarySize)
-		if err != nil {
-			return nil, nil
-		}
-		if want, ok := s.printed(x, from[alias], alias, column, keyAlias, ""); !ok || want != idx {
-			return nil, nil
 		}
 	} else if lm, nm := myTokenLabelRe.FindStringSubmatch(expr), myTokenLenRe.FindStringSubmatch(expr); keyAlias != "" && lm != nil && nm != nil {
 		var n int
@@ -921,6 +898,42 @@ func (s *myState) recognize(db, view, col string) (*myRecognized, error) {
 		}
 	}
 	return nil, nil
+}
+
+// fakeJoin checks that the dictionary join aliased fakeAlias is the one
+// maskplan generates: its index expression equals the printing of the
+// generated one for column fake_<column> of the view's one base table. It
+// returns that table's alias, the column and its label.
+func (s *myState) fakeJoin(db, view string, from map[string][2]string, keyAlias, fakeAlias string) (alias, column, label string, ok bool) {
+	column, ok = strings.CutPrefix(fakeAlias, "fake_")
+	if !ok || keyAlias == "" || from[fakeAlias] != [2]string{s.internal, "names"} {
+		return "", "", "", false
+	}
+	for a, rel := range from {
+		if rel[0] != s.internal {
+			if alias != "" {
+				return "", "", "", false
+			}
+			alias = a
+		}
+	}
+	if alias == "" {
+		return "", "", "", false
+	}
+	label = s.cls[classification.Key{Schema: from[alias][0], Table: from[alias][1], Column: column}].Label
+	idx, ok := fakeIndexExpr(s.viewFrom(db, view), s.internal, fakeAlias)
+	if !ok {
+		return "", "", "", false
+	}
+	pads := sqlexpr.Pads{IPad: quoteMy(keyAlias) + ".`ipad`", OPad: quoteMy(keyAlias) + ".`opad`"}
+	x, err := sqlexpr.FakeIndex(sqlexpr.MySQL, sqlexpr.Column{Expr: quoteMy(alias) + "." + quoteMy(column), Label: unlabeledOr(label), Normalizer: compile.NormalizerFor(label)}, pads, compile.DictionarySize)
+	if err != nil {
+		return "", "", "", false
+	}
+	if want, ok := s.printed(x, from[alias], alias, column, keyAlias, ""); !ok || want != idx {
+		return "", "", "", false
+	}
+	return alias, column, label, true
 }
 
 func unlabeledOr(label string) string {
