@@ -6,7 +6,7 @@ Terraform-style PII policies for Postgres and MySQL, so AI agents query masked d
 
 ## Status
 
-Pre-alpha. What works today, on PostgreSQL 13 to 17:
+Pre-alpha. What works today, on PostgreSQL 13 to 17 (and `scan` on MySQL 8.0 and 8.4):
 
 - `maskplan scan` labels personal data from column names, types and a sample of values, and writes `classification.yaml` for review;
 - `maskplan report --role` lists every labeled column a role can read raw, by which privilege path, and whether its reads are audited. Anything it cannot trace is reported as UNKNOWN, never as masked. See [docs/report.md](docs/report.md).
@@ -19,7 +19,7 @@ Both only read. Also here:
 - shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI;
 - a [benchmark](bench/README.md) of what masking costs on a 10-million-row table.
 
-Next: `scan` and `report` on MySQL, then `apply`.
+Next: `report` on MySQL, then `apply`.
 
 ```bash
 go install github.com/chauhanprateek89/maskplan/cmd/maskplan@latest
@@ -103,6 +103,7 @@ go test ./... -p 1 -v
 | `internal/fintech`, `testdata/fintech` | Synthetic Irish bank: generator, schema and ground truth |
 | `testdata/adventureworks` | Ground truth for AdventureWorks |
 | `testdata/gitlab` | Hand review of a scan of GitLab's schema |
+| `testdata/sakila` | Ground truth for Sakila (MySQL) |
 | `testdata/managed` | Simulated managed-service Postgres for CI |
 | `bench/accuracy`, `bench/fintech` | Accuracy runner and synthetic-bank loader |
 | `SECURITY.md` | How to report a vulnerability, and the UNKNOWN-never-MASKED guarantee |

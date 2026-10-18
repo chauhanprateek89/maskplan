@@ -1,6 +1,6 @@
 # maskplan scan and report
 
-`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later for now; MySQL comes next.
+`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later; `scan` also runs on MySQL 8.0 and 8.4, and `report` on MySQL comes next.
 
 ```bash
 export MASKPLAN_DSN=postgres://admin@db.internal:5432/app
@@ -26,6 +26,8 @@ Each entry records its label, a confidence and the evidence. Values matching a d
 Rescanning keeps every entry marked `reviewed: true` as it is, including entries for columns that no longer exist, so a dropped and re-added column does not silently lose its review.
 
 **How rows are chosen.** The first rows of a table are a poor sample: they are often seed or migrated data, or NULL in columns added later. So a table with more rows than the sample size, by the planner's estimate, is read with `TABLESAMPLE` and a fixed seed, so rows come from the whole table and a rescan of unchanged data reads the same rows. Up to about 10,000 pages (80 MB) `BERNOULLI` picks rows at a rate aimed at the sample size; larger tables use `SYSTEM`, which picks whole pages, from at least 50 of them. Either way the result is capped at twice the sample size, taking rows in an order scattered across the sample rather than physical order. Smaller tables are read whole. A table without statistics is read with `LIMIT`, the first rows only. Every sampled column's evidence says which method was used, for example `sampled 98 rows with TABLESAMPLE BERNOULLI (1%) of about 10000`, so a reviewer knows what its confidence rests on. Run `ANALYZE` before scanning a database whose statistics are missing.
+
+On MySQL, which has no `TABLESAMPLE`, tables up to 100 times the sample size are sampled with `ORDER BY RAND` and a fixed seed (MySQL keeps only the top rows while it scans); larger tables with a single integer primary key are read in ten evenly spaced key ranges, and other large tables with one pass of `WHERE RAND() < p`. If that pass exceeds the 60-second statement limit, the first rows are read and the evidence says so. Booleans are `tinyint(1)` and `bit(1)`.
 
 Foreign tables and unpopulated materialized views are classified by name and type only. The scanning user must be able to `SELECT` a column for it to be sampled.
 

@@ -1,0 +1,31 @@
+# Ground truth for Sakila, MySQL's sample DVD-rental database (BSD licence),
+# as published by github.com/jOOQ/sakila (mysql-sakila-db). Every column of
+# every base table in schema sakila not listed here is "none". Written
+# before maskplan scan was first run on MySQL.
+#
+# Judgments:
+# - Actors are people: their names are personal data.
+# - address rows belong to customers, staff and stores; district is part of
+#   the address. city and country are reference tables: none.
+# - Film titles and descriptions are not about people: none.
+# - staff.picture is a photo, personal data with no maskplan label yet: none
+#   here and listed as a gap.
+version: 1
+source: Sakila (github.com/jOOQ/sakila, mysql-sakila-db)
+schemas: [sakila]
+columns:
+  - {schema: sakila, table: actor, column: first_name, label: user.name}
+  - {schema: sakila, table: actor, column: last_name, label: user.name}
+  - {schema: sakila, table: address, column: address, label: user.contact.address}
+  - {schema: sakila, table: address, column: address2, label: user.contact.address}
+  - {schema: sakila, table: address, column: district, label: user.contact.address}
+  - {schema: sakila, table: address, column: postal_code, label: user.contact.address.postal_code}
+  - {schema: sakila, table: address, column: phone, label: user.contact.phone}
+  - {schema: sakila, table: customer, column: first_name, label: user.name}
+  - {schema: sakila, table: customer, column: last_name, label: user.name}
+  - {schema: sakila, table: customer, column: email, label: user.contact.email}
+  - {schema: sakila, table: staff, column: first_name, label: user.name}
+  - {schema: sakila, table: staff, column: last_name, label: user.name}
+  - {schema: sakila, table: staff, column: email, label: user.contact.email}
+  - {schema: sakila, table: staff, column: username, label: user.unique_id}
+  - {schema: sakila, table: staff, column: password, label: system.authentication}

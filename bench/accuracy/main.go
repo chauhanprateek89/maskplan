@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/accuracy"
@@ -33,6 +35,10 @@ func main() {
 	reviewPath := flag.String("review", "", "hand review file, instead of -truth")
 	flag.Parse()
 	ctx := context.Background()
+	if strings.Contains(*dsn, "@tcp(") {
+		runMySQL(ctx, *dsn, *truthPath, *samples, *out, *errors)
+		return
+	}
 	conn, err := pgx.Connect(ctx, *dsn)
 	if err != nil {
 		log.Fatal(err)
@@ -108,6 +114,57 @@ func main() {
 	if *out != "" {
 		data, _ := json.MarshalIndent(result, "", "  ")
 		if err := os.WriteFile(*out, append(data, '\n'), 0o644); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+// runMySQL is the ground-truth run against MySQL (driver-form DSN).
+func runMySQL(ctx context.Context, dsn, truthPath, samples, out string, listErrors bool) {
+	truth, err := accuracy.LoadTruth(truthPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	var version string
+	if err := db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version); err != nil {
+		log.Fatal(err)
+	}
+	type run struct {
+		Sample  int            `json:"sample"`
+		Seconds float64        `json:"seconds"`
+		Score   accuracy.Score `json:"score"`
+	}
+	var runs []run
+	for _, s := range strings.Split(samples, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			log.Fatalf("bad sample size %q", s)
+		}
+		start := time.Now()
+		f, err := scan.MySQL(ctx, db, scan.Options{Schemas: truth.Schemas, SampleRows: n})
+		if err != nil {
+			log.Fatal(err)
+		}
+		sc := accuracy.Compare(truth, f)
+		runs = append(runs, run{Sample: n, Seconds: time.Since(start).Seconds(), Score: sc})
+		fmt.Printf("sample %d rows per table: %d columns, %.1f s\n", n, sc.Columns, time.Since(start).Seconds())
+		sc.WriteTable(os.Stdout)
+		if listErrors {
+			for _, e := range sc.Errors {
+				fmt.Printf("  %-45s want %-32s got %-32s %s\n", e.Column, e.Want, e.Got, e.Evidence)
+			}
+		}
+		fmt.Println()
+	}
+	if out != "" {
+		data, _ := json.MarshalIndent(map[string]any{"truth": truthPath, "source": truth.Source, "mysql": version,
+			"date": time.Now().UTC().Format("2006-01-02"), "runs": runs}, "", "  ")
+		if err := os.WriteFile(out, append(data, '\n'), 0o644); err != nil {
 			log.Fatal(err)
 		}
 	}

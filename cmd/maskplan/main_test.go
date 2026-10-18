@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
@@ -26,9 +28,31 @@ func TestUsageErrors(t *testing.T) {
 		}
 	}
 	var out, errOut bytes.Buffer
-	if code := run([]string{"scan", "--dsn", "root:pw@tcp(127.0.0.1:3306)/db"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "MySQL is not supported") {
-		t.Errorf("mysql dsn: exit %d, %s", code, errOut.String())
+	if code := run([]string{"report", "--role", "r", "--classification", writeEmptyClassification(t), "--dsn", "mysql://u:p@db.invalid/x"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "does not support MySQL") {
+		t.Errorf("report on mysql: exit %d, %s", code, errOut.String())
 	}
+	for in, want := range map[string]string{
+		"mysql://u:p@db.example:3307/app": "u:p@tcp(db.example:3307)/app",
+		"mysql://u:p@db.example/app":      "u:p@tcp(db.example:3306)/app",
+		"u:p@tcp(h:3306)/app":             "u:p@tcp(h:3306)/app",
+	} {
+		got, isMySQL, err := resolveDSN(in)
+		if err != nil || !isMySQL || !strings.HasPrefix(got, want) {
+			t.Errorf("resolveDSN(%q) = %q, %v, %v; want prefix %q", in, got, isMySQL, err, want)
+		}
+	}
+	if _, isMySQL, _ := resolveDSN("postgres://u@h/db"); isMySQL {
+		t.Error("postgres DSN taken for MySQL")
+	}
+}
+
+func writeEmptyClassification(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir() + "/c.yaml"
+	if err := classification.Save(path, &classification.File{Version: classification.Version}); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // TestScanReportPostgres runs the two commands end to end.
@@ -123,4 +147,38 @@ func TestScanReportPostgres(t *testing.T) {
 		t.Errorf("json: %+v", j)
 	}
 	cmd(2, "report", "--role", "mpc_no_such_role", "--classification", cls)
+}
+
+// TestScanMySQL runs scan end to end against MySQL.
+func TestScanMySQL(t *testing.T) {
+	dsn := os.Getenv("MASKPLAN_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("MASKPLAN_TEST_MYSQL_DSN not set")
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	for _, q := range []string{"DROP DATABASE IF EXISTS mpc_cli", "CREATE DATABASE mpc_cli",
+		"CREATE TABLE mpc_cli.customers (id int PRIMARY KEY, email varchar(100))",
+		"INSERT INTO mpc_cli.customers VALUES (1, 'a@example.com'), (2, 'b@example.com')"} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer db.ExecContext(ctx, "DROP DATABASE IF EXISTS mpc_cli")
+	cls := t.TempDir() + "/classification.yaml"
+	var out, errOut bytes.Buffer
+	if code := run([]string{"scan", "--dsn", dsn, "--schema", "mpc_cli", "--out", cls}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	f, err := classification.Load(cls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Source.Engine != "mysql" || f.Index()[classification.Key{Schema: "mpc_cli", Table: "customers", Column: "email"}].Label != "user.contact.email" {
+		t.Errorf("scan result: %+v", f)
+	}
 }

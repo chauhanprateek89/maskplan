@@ -14,6 +14,7 @@ go run ./bench/accuracy -dsn "$GITLAB_DSN" -review testdata/gitlab/review.yaml
 | Synthetic Irish bank, with data | 104 | held out from tuning | 0.87 | 0.87 (1.00 on the gated labels) |
 | AdventureWorks, with data | 468 | tuned on | 0.86 | 0.96 |
 | GitLab schema, no data | 11,143 | tuned on, recall sample held out | 0.45 (0.92 without free text) | about 0.74 (0.50 to 0.89) |
+| Sakila on MySQL, with data | 89 | held out from tuning | 0.81 | 0.87 |
 
 Raw results, including every misclassified column and its evidence, are in `bench/results/accuracy-*.json`. Measured on PostgreSQL 16, 2026-10-18.
 
@@ -96,10 +97,16 @@ GitLab drove these rules, each general:
 
 **Report on the same schema:** for a role that can read every table, `report` took 1.4 s and found 538 raw columns, plus 47 UNKNOWN from GitLab's own monitoring views, which call functions over the system catalogs that the report does not follow.
 
+### Sakila (MySQL)
+
+MySQL's sample DVD-rental database, from [jOOQ/sakila](https://github.com/jOOQ/sakila), scored with the classifier as it stood after the GitLab changes and the first run of `scan` on MySQL. Nothing was tuned on it. Only the ground truth is in this repository (`testdata/sakila/labels.yaml`).
+
+Precision 0.81 and recall 0.87 for personal data, the same at all three sample sizes. Every name, email, phone, username and password column is found. Missed: `address2`, because the address rule allows `address_line_2` but not a bare digit, and `district`. False positives: `city.city`, a reference table of city names, and two film descriptions.
+
 ## Known gaps
 
 - **No label yet** for salary or income, nationality, occupation, user agent, card expiry, location coordinates, photos or device fingerprints. They count as `none` in the ground truths.
 - **Hashed identifiers** (a hash of a card number or an email) are still personal data; nothing detects them yet.
 - **No value detector** for national IDs, postal codes, names or addresses: those rely on column names, so a `col_a` full of PPSNs is missed.
 - **Sample size made no difference** on the datasets with data, once documents were read in full. A column where personal data is a minority of values would show one; none of them has such a column yet.
-- **One engine.** Next: Sakila and OpenEMR, when `scan` supports MySQL.
+- **MySQL** has one small dataset so far. Next: OpenEMR's schema for false positives on real-world names.

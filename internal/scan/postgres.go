@@ -56,20 +56,20 @@ const (
 	sampledDocumentBytes = 32 << 10
 )
 
-type pgColumn struct {
+type column struct {
 	name, typ                         string
 	text, numeric, date, doc, canRead bool
 	category                          string // pg_type.typcategory
 	sample                            bool   // values are read and classified
 }
 
-type pgTable struct {
+type table struct {
 	schema, name string
 	kind         byte    // r, p, m or f
 	rows         float64 // planner estimate; <= 0 when unknown
 	pages        float64 // planner estimate
 	populated    bool
-	columns      []pgColumn
+	columns      []column
 }
 
 // numericLabels are the labels whose values are often stored as numbers in
@@ -124,19 +124,19 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 	if err != nil {
 		return nil, err
 	}
-	var tables []*pgTable
+	var tables []*table
 	for rows.Next() {
 		var schema, name, kind string
 		var populated bool
 		var est, pages *float64
-		var c pgColumn
+		var c column
 		if err := rows.Scan(&schema, &name, &kind, &populated, &est, &pages, &c.name, &c.typ, &c.text, &c.numeric, &c.date, &c.doc, &c.category, &c.canRead); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		c.sample = c.text || c.numeric && numericLabels[classify.ByName(c.name)]
 		if n := len(tables); n == 0 || tables[n-1].schema != schema || tables[n-1].name != name {
-			t := &pgTable{schema: schema, name: name, kind: kind[0], populated: populated}
+			t := &table{schema: schema, name: name, kind: kind[0], populated: populated}
 			if est != nil {
 				t.rows = *est
 			}
@@ -213,7 +213,7 @@ func markDerived(cols []classification.Column) {
 // least systemMinPages of them. The seed
 // is fixed so a rescan of unchanged data reads the same rows. Tables
 // without statistics are read with LIMIT, and the note says so.
-func sampleTable(ctx context.Context, tx pgx.Tx, t *pgTable, n int) ([][]string, string) {
+func sampleTable(ctx context.Context, tx pgx.Tx, t *table, n int) ([][]string, string) {
 	switch {
 	case n == 0:
 		return nil, ""

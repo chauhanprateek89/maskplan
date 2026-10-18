@@ -14,15 +14,18 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
@@ -34,7 +37,8 @@ const usage = `usage:
   maskplan scan   --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml]
   maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--schema a,b] [--json]
 
-DSN may also be set in MASKPLAN_DSN. Only PostgreSQL 13 and later is supported so far.
+DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8 (scan only so far)
+user:pass@tcp(host:3306)/db or mysql://user:pass@host:3306/db.
 `
 
 func main() {
@@ -80,16 +84,37 @@ func splitList(s string) []string {
 	return out
 }
 
-func connect(ctx context.Context, dsn string) (*pgx.Conn, error) {
+// resolveDSN returns the DSN to use and whether it names a MySQL server:
+// either the Go driver's form (user:pass@tcp(host:3306)/db) or a URL
+// (mysql://user:pass@host:3306/db), which it converts to the driver's form.
+func resolveDSN(dsn string) (string, bool, error) {
 	if dsn == "" {
 		dsn = os.Getenv("MASKPLAN_DSN")
 	}
 	switch {
 	case dsn == "":
-		return nil, errors.New("no database: pass --dsn or set MASKPLAN_DSN")
-	case strings.HasPrefix(dsn, "mysql://") || strings.Contains(dsn, "@tcp("):
-		return nil, errors.New("MySQL is not supported by scan and report yet; PostgreSQL only")
+		return "", false, errors.New("no database: pass --dsn or set MASKPLAN_DSN")
+	case strings.HasPrefix(dsn, "mysql://"):
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "", false, err
+		}
+		cfg := mysql.NewConfig()
+		cfg.User = u.User.Username()
+		cfg.Passwd, _ = u.User.Password()
+		cfg.Net, cfg.Addr = "tcp", u.Host
+		if u.Port() == "" {
+			cfg.Addr = u.Host + ":3306"
+		}
+		cfg.DBName = strings.TrimPrefix(u.Path, "/")
+		return cfg.FormatDSN(), true, nil
+	case strings.Contains(dsn, "@tcp(") || strings.Contains(dsn, "@unix("):
+		return dsn, true, nil
 	}
+	return dsn, false, nil
+}
+
+func connect(ctx context.Context, dsn string) (*pgx.Conn, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
@@ -114,18 +139,34 @@ func runScan(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	conn, err := connect(ctx, *dsn)
+	target, isMySQL, err := resolveDSN(*dsn)
 	if err != nil {
 		return err
 	}
-	defer conn.Close(ctx)
 	rows := *sample
 	if rows == 0 {
 		rows = -1 // scan.Options: negative means no sampling
 	}
-	f, err := scan.Postgres(ctx, conn, scan.Options{Schemas: splitList(*schemas), InternalSchema: *internal, SampleRows: rows})
-	if err != nil {
-		return err
+	opts := scan.Options{Schemas: splitList(*schemas), InternalSchema: *internal, SampleRows: rows}
+	var f *classification.File
+	if isMySQL {
+		db, err := sql.Open("mysql", target)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		if f, err = scan.MySQL(ctx, db, opts); err != nil {
+			return err
+		}
+	} else {
+		conn, err := connect(ctx, target)
+		if err != nil {
+			return err
+		}
+		defer conn.Close(ctx)
+		if f, err = scan.Postgres(ctx, conn, opts); err != nil {
+			return err
+		}
 	}
 	previous, err := classification.Load(*out)
 	switch {
@@ -190,7 +231,14 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	conn, err := connect(ctx, *dsn)
+	target, isMySQL, err := resolveDSN(*dsn)
+	if err != nil {
+		return 2, err
+	}
+	if isMySQL {
+		return 2, errors.New("report does not support MySQL yet; scan does")
+	}
+	conn, err := connect(ctx, target)
 	if err != nil {
 		return 2, err
 	}
