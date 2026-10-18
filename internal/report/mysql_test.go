@@ -174,14 +174,22 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		"GRANT FILE ON *.* TO mpt_file@'%'",
 		"GRANT REPLICATION SLAVE ON *.* TO mpt_repl@'%'",
 		"GRANT PROCESS ON *.* TO mpt_proc@'%'",
-		"GRANT PROXY ON mpt_table@'%' TO mpt_proxy@'%'",
 		"GRANT SELECT ON mpt_data.unlabeled TO mpt_unlab@'%'",
 		"GRANT SELECT (id, email_tok) ON mpt_data.contacts TO mpt_derived@'%'",
 		"GRANT SELECT ON mpt_views.contact_tokens TO mpt_derived@'%'",
 		"GRANT SELECT ON mysql.user TO mpt_mysqldb@'%'",
 		"GRANT ROLE_ADMIN ON *.* TO mpt_roleadmin@'%'",
 	)
+	myExec(t, db, proxyGrant("mpt_proxy", "mpt_table"))
+	myExec(t, db, "FLUSH PRIVILEGES")
 	return db, cfg
+}
+
+// proxyGrant writes the row GRANT PROXY would. GRANT PROXY needs the
+// grantor to hold PROXY WITH GRANT OPTION, which only root@localhost has by
+// default; the report reads the table, so the row is what matters.
+func proxyGrant(user, proxied string) string {
+	return fmt.Sprintf("INSERT INTO mysql.proxies_priv (Host, User, Proxied_host, Proxied_user, With_grant, Grantor) VALUES ('%%', '%s', '%%', '%s', 0, 'maskplan-test@%%')", user, proxied)
 }
 
 func myReport(t *testing.T, db *sql.DB, account string) *Report {
@@ -353,15 +361,15 @@ func TestReportMySQL(t *testing.T) {
 		{"definer function", "GRANT EXECUTE ON FUNCTION mpt_fn.customer_email TO mpt_clean@'%'", "REVOKE EXECUTE ON FUNCTION mpt_fn.customer_email FROM mpt_clean@'%'"},
 		{"wildcard database", "GRANT SELECT ON `mpt\\_dat_`.* TO mpt_clean@'%'", "REVOKE SELECT ON `mpt\\_dat_`.* FROM mpt_clean@'%'"},
 		{"file", "GRANT FILE ON *.* TO mpt_clean@'%'", "REVOKE FILE ON *.* FROM mpt_clean@'%'"},
-		{"proxy", "GRANT PROXY ON mpt_table@'%' TO mpt_clean@'%'", "REVOKE PROXY ON mpt_table@'%' FROM mpt_clean@'%'"},
+		{"proxy", proxyGrant("mpt_clean", "mpt_table"), "DELETE FROM mysql.proxies_priv WHERE User = 'mpt_clean'"},
 		{"replication", "GRANT REPLICATION SLAVE ON *.* TO mpt_clean@'%'", "REVOKE REPLICATION SLAVE ON *.* FROM mpt_clean@'%'"},
 		{"column of a raw table", "GRANT SELECT (phone) ON mpt_data.customers TO mpt_clean@'%'", "REVOKE SELECT (phone) ON mpt_data.customers FROM mpt_clean@'%'"},
 		{"global select", "GRANT SELECT ON *.* TO mpt_clean@'%'", "REVOKE SELECT ON *.* FROM mpt_clean@'%'"},
 	}
 	for _, m := range mutations {
 		t.Run("mutation/"+m.name, func(t *testing.T) {
-			myExec(t, db, m.apply)
-			defer myExec(t, db, m.revert)
+			myExec(t, db, m.apply, "FLUSH PRIVILEGES")
+			defer myExec(t, db, m.revert, "FLUSH PRIVILEGES")
 			if r := myReport(t, db, "mpt_clean@%"); !r.Failed() {
 				t.Errorf("report passed mpt_clean after %s\n%s", m.apply, dump(r))
 			}

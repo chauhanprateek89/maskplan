@@ -34,6 +34,7 @@ A record of mistakes made while building maskplan, how each was caught, and what
 | 2026-10-18 | MySQL's rewritten statement (`SHOW WARNINGS` after `EXPLAIN`) substitutes the key pads as literals and is cut at the first NUL byte, which a random 64-byte pad contains about a fifth of the time; comparing rewrites would have made MASKED depend on the key's bytes | The masked view came out unparseable with the test key (its pads contain 0x00) | MASKED compares the view's stored definition with a reference query whose key join is not constant, so the pads print as column references |
 | 2026-10-18 | Two first-version MySQL mutants survived: the token comparison and the constant-table check were each shadowed by an earlier check, so no fixture depended on them | Mutation testing | Fixtures that pass every earlier check: a token-shaped expression whose first 16 characters are the email, and a view filtered by primary key; a third survivor (the real-key-table check) is redundant with the one-base-column check and is left as defence in depth |
 
+| 2026-10-18 | The MySQL fixture used `GRANT PROXY`, which needs the grantor to hold PROXY with grant option; only `root@localhost` has it by default, and CI connects as `root@'%'`. Locally I had granted my test account the privilege to get past the same error, which hid the problem | CI on #6, both MySQL versions | The fixture writes the `mysql.proxies_priv` row directly, as the report reads it; reproduced without the local grant first |
 
 ## Design choices that failed under measurement
 
