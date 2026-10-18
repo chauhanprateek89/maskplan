@@ -6,18 +6,18 @@
   "runs": [
     {
       "sample": 100,
-      "seconds": 0.222721029,
+      "seconds": 0.282997346,
       "score": {
         "columns": 468,
         "pii": {
           "TP": 25,
-          "FP": 9,
+          "FP": 4,
           "FN": 1
         },
         "labels": {
           "free_text": {
             "TP": 5,
-            "FP": 7,
+            "FP": 3,
             "FN": 0
           },
           "system.authentication": {
@@ -77,7 +77,7 @@
           },
           "user.name": {
             "TP": 4,
-            "FP": 1,
+            "FP": 0,
             "FN": 0
           },
           "user.unique_id": {
@@ -94,34 +94,10 @@
             "evidence": "no name rule or value detector matched"
           },
           {
-            "column": "person.contacttype.name",
-            "want": "none",
-            "got": "user.name",
-            "evidence": "column \"name\" in table \"contacttype\", which holds people; sampled all 20 rows"
-          },
-          {
-            "column": "production.illustration.diagram",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
-          },
-          {
             "column": "production.productdescription.description",
             "want": "none",
             "got": "free_text",
             "evidence": "column name \"description\" matches the free_text rule; sampled 100 rows with TABLESAMPLE BERNOULLI (13.1%) of about 762"
-          },
-          {
-            "column": "production.productmodel.catalogdescription",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
-          },
-          {
-            "column": "production.productmodel.instructions",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
           },
           {
             "column": "production.vproductanddescription.description",
@@ -146,30 +122,24 @@
             "want": "none",
             "got": "free_text",
             "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
-          },
-          {
-            "column": "sales.store.demographics",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled 106 rows with TABLESAMPLE BERNOULLI (14.3%) of about 701"
           }
         ]
       }
     },
     {
       "sample": 1000,
-      "seconds": 0.354847136,
+      "seconds": 0.791892656,
       "score": {
         "columns": 468,
         "pii": {
           "TP": 25,
-          "FP": 9,
+          "FP": 4,
           "FN": 1
         },
         "labels": {
           "free_text": {
             "TP": 5,
-            "FP": 7,
+            "FP": 3,
             "FN": 0
           },
           "system.authentication": {
@@ -229,7 +199,7 @@
           },
           "user.name": {
             "TP": 4,
-            "FP": 1,
+            "FP": 0,
             "FN": 0
           },
           "user.unique_id": {
@@ -246,34 +216,10 @@
             "evidence": "no name rule or value detector matched"
           },
           {
-            "column": "person.contacttype.name",
-            "want": "none",
-            "got": "user.name",
-            "evidence": "column \"name\" in table \"contacttype\", which holds people; sampled all 20 rows"
-          },
-          {
-            "column": "production.illustration.diagram",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
-          },
-          {
             "column": "production.productdescription.description",
             "want": "none",
             "got": "free_text",
             "evidence": "column name \"description\" matches the free_text rule; sampled all 762 rows"
-          },
-          {
-            "column": "production.productmodel.catalogdescription",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
-          },
-          {
-            "column": "production.productmodel.instructions",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
           },
           {
             "column": "production.vproductanddescription.description",
@@ -298,30 +244,24 @@
             "want": "none",
             "got": "free_text",
             "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
-          },
-          {
-            "column": "sales.store.demographics",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 701 rows"
           }
         ]
       }
     },
     {
       "sample": 10000,
-      "seconds": 1.978039544,
+      "seconds": 4.081774119,
       "score": {
         "columns": 468,
         "pii": {
           "TP": 25,
-          "FP": 9,
+          "FP": 4,
           "FN": 1
         },
         "labels": {
           "free_text": {
             "TP": 5,
-            "FP": 7,
+            "FP": 3,
             "FN": 0
           },
           "system.authentication": {
@@ -381,7 +321,7 @@
           },
           "user.name": {
             "TP": 4,
-            "FP": 1,
+            "FP": 0,
             "FN": 0
           },
           "user.unique_id": {
@@ -398,34 +338,10 @@
             "evidence": "no name rule or value detector matched"
           },
           {
-            "column": "person.contacttype.name",
-            "want": "none",
-            "got": "user.name",
-            "evidence": "column \"name\" in table \"contacttype\", which holds people; sampled all 20 rows"
-          },
-          {
-            "column": "production.illustration.diagram",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
-          },
-          {
             "column": "production.productdescription.description",
             "want": "none",
             "got": "free_text",
             "evidence": "column name \"description\" matches the free_text rule; sampled all 762 rows"
-          },
-          {
-            "column": "production.productmodel.catalogdescription",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
-          },
-          {
-            "column": "production.productmodel.instructions",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
           },
           {
             "column": "production.vproductanddescription.description",
@@ -450,12 +366,6 @@
             "want": "none",
             "got": "free_text",
             "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
-          },
-          {
-            "column": "sales.store.demographics",
-            "want": "none",
-            "got": "free_text",
-            "evidence": "xml documents can hold personal data under any key; review; sampled all 701 rows"
           }
         ]
       }

@@ -48,6 +48,9 @@ func TestScanPostgres(t *testing.T) {
 		"CREATE TABLE " + schema + ".events_2026 PARTITION OF " + schema + ".events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
 		"CREATE MATERIALIZED VIEW " + schema + ".emails AS SELECT email FROM " + schema + ".customers WITH NO DATA",
 		"CREATE TABLE " + schema + ".empty (email text)",
+		// The personal data comes after 300 bytes of namespace declarations.
+		`CREATE TABLE ` + schema + `.contact_docs (id int, info xml)`,
+		`INSERT INTO ` + schema + `.contact_docs SELECT g, ('<Info xmlns="` + strings.Repeat("x", 300) + `"><t:telephoneNumber>01 234 5678</t:telephoneNumber></Info>')::xml FROM generate_series(1, 5) g`,
 	} {
 		if _, err := conn.Exec(ctx, q); err != nil {
 			t.Fatalf("%v\n%s", err, q)
@@ -71,7 +74,7 @@ func TestScanPostgres(t *testing.T) {
 		"customers.dob":            classify.BirthDate,
 		"customers.dob_text":       classify.None, // a dob name on text is not trusted
 		"customers.created":        classify.None,
-		"customers.payload":        classify.FreeText,
+		"customers.payload":        classify.None, // {"k": 1}: no personal keys or values
 		"customers.status":         classify.None,
 		"customers.notes":          classify.FreeText,
 		"customers.amount_cents":   classify.None, // numbers are not sampled for phone shapes
@@ -83,6 +86,8 @@ func TestScanPostgres(t *testing.T) {
 		"events.at":                classify.None,
 		"emails.email":             classify.Email,
 		"empty.email":              classify.Email,
+		"contact_docs.id":          classify.None,
+		"contact_docs.info":        classify.FreeText,
 	}
 	for k, label := range want {
 		parts := strings.SplitN(k, ".", 2)

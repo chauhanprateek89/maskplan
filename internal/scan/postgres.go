@@ -49,12 +49,18 @@ var (
 )
 
 // sampledValueBytes bounds each sampled value; detectors need no more.
-const sampledValueBytes = 256
+// Documents are read further: their keys are the evidence, and an XML
+// document can spend its first few hundred bytes on namespace declarations.
+const (
+	sampledValueBytes    = 256
+	sampledDocumentBytes = 32 << 10
+)
 
 type pgColumn struct {
 	name, typ                         string
 	text, numeric, date, doc, canRead bool
-	sample                            bool // values are read and classified
+	category                          string // pg_type.typcategory
+	sample                            bool   // values are read and classified
 }
 
 type pgTable struct {
@@ -102,6 +108,7 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 			t.typcategory = 'N',
 			t.typcategory = 'D',
 			t.typname IN ('json', 'jsonb', 'xml'),
+			t.typcategory::text,
 			has_column_privilege(c.oid, a.attnum, 'SELECT')
 		FROM pg_attribute a
 		JOIN pg_class c ON c.oid = a.attrelid
@@ -123,7 +130,7 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 		var populated bool
 		var est, pages *float64
 		var c pgColumn
-		if err := rows.Scan(&schema, &name, &kind, &populated, &est, &pages, &c.name, &c.typ, &c.text, &c.numeric, &c.date, &c.doc, &c.canRead); err != nil {
+		if err := rows.Scan(&schema, &name, &kind, &populated, &est, &pages, &c.name, &c.typ, &c.text, &c.numeric, &c.date, &c.doc, &c.category, &c.canRead); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -149,7 +156,7 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 		start := len(f.Columns)
 		samples, note := sampleTable(ctx, tx, t, opts.sampleRows())
 		for i, c := range t.columns {
-			in := classify.Input{Name: c.name, Table: t.name, DataType: c.typ, IsText: c.sample && samples != nil, IsDate: c.date, IsDoc: c.doc}
+			in := classify.Input{Name: c.name, Table: t.name, DataType: c.typ, Category: c.category, IsText: c.sample && samples != nil, IsDate: c.date, IsDoc: c.doc}
 			if samples != nil {
 				in.Samples = samples[i]
 			}
@@ -219,7 +226,11 @@ func sampleTable(ctx context.Context, tx pgx.Tx, t *pgTable, n int) ([][]string,
 	var idx []int
 	for i, c := range t.columns {
 		if c.sample && c.canRead {
-			exprs = append(exprs, fmt.Sprintf("left(%s::text, %d)", pgx.Identifier{c.name}.Sanitize(), sampledValueBytes))
+			limit := sampledValueBytes
+			if c.doc {
+				limit = sampledDocumentBytes
+			}
+			exprs = append(exprs, fmt.Sprintf("left(%s::text, %d)", pgx.Identifier{c.name}.Sanitize(), limit))
 			idx = append(idx, i)
 		}
 	}

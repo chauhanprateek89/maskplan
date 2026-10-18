@@ -91,6 +91,7 @@ These all err toward `UNKNOWN` or are outside what a catalog report can see. Non
 - **Masking written another way is not recognized.** Row-filtered masked views (which keep `security_barrier`), masked views over joins, and hand-written masking show as `UNKNOWN`. They will be recognized once `apply` generates them, by the same plan comparison.
 - **Rows are not evaluated.** The report is per column; row-level security policies are not interpreted.
 - **Extension functions and views are trusted to the extent of a WARN.** A `SECURITY DEFINER` function or a view that belongs to an extension is reported but does not fail the report. Anyone who can run `ALTER EXTENSION ... ADD` (the extension's owner) could hide a function or a view that way; the finding still names it. Tables that belong to an extension are checked like any other.
+- **Views over the system catalogs** pass when they only expose what `PUBLIC` can read there anyway. A view that reads a catalog `PUBLIC` cannot (`pg_authid`, which holds password hashes) is `UNKNOWN`, and so is one that calls functions the report cannot follow; GitLab's monitoring views are an example.
 - **Invoker functions are not followed.** A function that is not `SECURITY DEFINER` runs with the caller's privileges, so it can only read what the report already lists.
 - **Only the hex spelling of a hard-coded key is detected**, not base64 or a key split across literals.
 - **Large objects** are noticed, not classified.

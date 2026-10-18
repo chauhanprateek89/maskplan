@@ -6,7 +6,7 @@
   "runs": [
     {
       "sample": 100,
-      "seconds": 0.086639866,
+      "seconds": 0.091517562,
       "score": {
         "columns": 104,
         "pii": {
@@ -147,7 +147,7 @@
     },
     {
       "sample": 1000,
-      "seconds": 0.292802494,
+      "seconds": 0.386155456,
       "score": {
         "columns": 104,
         "pii": {
@@ -288,7 +288,7 @@
     },
     {
       "sample": 10000,
-      "seconds": 2.721752006,
+      "seconds": 3.359604896,
       "score": {
         "columns": 104,
         "pii": {

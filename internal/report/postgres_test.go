@@ -28,13 +28,13 @@ const (
 	extDropView   = "ALTER EXTENSION postgres_fdw DROP VIEW mpt_fn.ext_catalog"
 )
 
-var testSchemas = []string{"mpt_data", "mpt_pub", "mpt_views", "mpt_masked", "mpt_fn", "mpt_sneaky"}
+var testSchemas = []string{"mpt_data", "mpt_pub", "mpt_views", "mpt_masked", "mpt_fn", "mpt_sneaky", "mpt_parts"}
 
 // sneakyViews look like, or contain, maskplan tokens but return raw data or
 // cannot be traced. Every column must come out UNKNOWN, never MASKED. The
 // first five defeated the first version of the report (NOTES.md).
 var sneakyViews = []string{"coalesce_token", "token_concat", "newline_literal", "whole_row", "init_plan",
-	"union_all", "cte", "copied_key_table", "aggregate"}
+	"union_all", "cte", "copied_key_table", "aggregate", "authid"}
 
 var testKey = []byte("report-test-key-0123456789abcdef")
 
@@ -178,6 +178,8 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"CREATE TABLE mpt_data.orders (id int PRIMARY KEY, customer_id int, total numeric)",
 		"CREATE TABLE mpt_data.events (id int, ip inet, at date) PARTITION BY RANGE (at)",
 		"CREATE TABLE mpt_data.events_2026 PARTITION OF mpt_data.events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
+		// A partition in another schema than its root, as GitLab keeps them.
+		"CREATE TABLE mpt_parts.events_2027 PARTITION OF mpt_data.events FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')",
 		"CREATE MATERIALIZED VIEW mpt_data.customer_mv AS SELECT id, email FROM mpt_data.customers",
 		"CREATE TABLE mpt_data.unlabeled (id int, secret_notes text)",
 		"CREATE TABLE mpt_data.contacts (id int, email text, email_tok text)",
@@ -213,6 +215,11 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		fmt.Sprintf("CREATE VIEW mpt_sneaky.copied_key_table AS SELECT %s AS email FROM mpt_data.customers c",
 			tokWith("c.email", sqlexpr.Pads{IPad: "(SELECT ipad FROM mpt_sneaky.key_material)", OPad: "(SELECT opad FROM mpt_sneaky.key_material)"})),
 		"CREATE VIEW mpt_sneaky.aggregate AS SELECT string_agg(email, ',') AS email FROM mpt_data.customers",
+		// pg_authid holds password hashes; PUBLIC cannot read it, the owner can.
+		"CREATE VIEW mpt_sneaky.authid AS SELECT rolpassword AS email FROM pg_authid",
+		// What PUBLIC can read in the catalog anyway: no finding.
+		"CREATE VIEW mpt_fn.relnames AS SELECT c.relname, n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace",
+		"GRANT SELECT ON mpt_fn.relnames TO mpt_clean",
 		"GRANT USAGE ON SCHEMA mpt_sneaky TO mpt_sneaky",
 		"GRANT SELECT ON ALL TABLES IN SCHEMA mpt_sneaky TO mpt_sneaky",
 		"REVOKE SELECT ON mpt_sneaky.key_material FROM mpt_sneaky",
@@ -248,6 +255,8 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"GRANT SELECT ON mpt_internal.key_material TO mpt_key",
 		"GRANT SELECT (ipad) ON mpt_internal.key_material TO mpt_keycol",
 		"GRANT SELECT ON mpt_data.events_2026 TO mpt_part",
+		"GRANT USAGE ON SCHEMA mpt_parts TO mpt_part",
+		"GRANT SELECT ON mpt_parts.events_2027 TO mpt_part",
 		"GRANT SELECT ON mpt_data.customer_mv TO mpt_matview",
 		"GRANT SELECT ON mpt_data.unlabeled TO mpt_unlab",
 		"GRANT USAGE ON SCHEMA mpt_data, mpt_views TO mpt_derived",
@@ -397,7 +406,7 @@ func TestReportPostgres(t *testing.T) {
 		{role: "mpt_fdw", needFDW: true, want: []expect{{Unknown, "foreign server mpt_loop", []string{"user mapping for mpt_fdw"}}}},
 		{role: "mpt_key", want: []expect{{Key, testInternal + ".key_material", []string{"as mpt_key"}}}},
 		{role: "mpt_keycol", want: []expect{{Key, testInternal + ".key_material", []string{"as mpt_keycol"}}}},
-		{role: "mpt_part", want: []expect{{Raw, "mpt_data.events_2026.ip", nil}}, mustNot: []string{"mpt_data.events.ip"}},
+		{role: "mpt_part", want: []expect{{Raw, "mpt_data.events_2026.ip", nil}, {Raw, "mpt_parts.events_2027.ip", nil}}, mustNot: []string{"mpt_data.events.ip"}},
 		{role: "mpt_matview", want: []expect{{Raw, "mpt_data.customer_mv.email", nil}}, mustNot: []string{email}},
 		{role: "mpt_unlab", want: []expect{
 			{Unlabeled, "mpt_data.unlabeled.secret_notes", []string{"not in the classification"}},

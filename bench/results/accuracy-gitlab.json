@@ -1,0 +1,53 @@
+{
+  "by_label": {
+    "free_text": [
+      36,
+      294
+    ],
+    "system.authentication": [
+      127,
+      127
+    ],
+    "user.contact.address": [
+      1,
+      1
+    ],
+    "user.contact.email": [
+      26,
+      30
+    ],
+    "user.contact.phone": [
+      4,
+      4
+    ],
+    "user.device.ip_address": [
+      14,
+      15
+    ],
+    "user.name": [
+      15,
+      18
+    ],
+    "user.unique_id": [
+      7,
+      17
+    ]
+  },
+  "columns": 11143,
+  "correct": 230,
+  "date": "2026-10-18",
+  "misses": 3,
+  "negatives": 10637,
+  "positives": 506,
+  "precision": 0.45454545454545453,
+  "recall_estimate": 0.7419894729182333,
+  "recall_interval": [
+    0.4971540542364276,
+    0.8941296220484859
+  ],
+  "review": "testdata/gitlab/review.yaml",
+  "sampled": 399,
+  "sha256": "cfebc5f4c7bda01f01ad9a051e5c6ba554bea9730ab703758246b88e832c8b93",
+  "source": "https://gitlab.com/gitlab-org/gitlab/-/raw/master/db/structure.sql, downloaded 2026-10-18",
+  "unjudged": null
+}

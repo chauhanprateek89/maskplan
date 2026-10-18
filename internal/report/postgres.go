@@ -54,8 +54,9 @@ type pgState struct {
 	cls      map[classification.Key]classification.Column
 	opts     Options
 	report   *Report
-	roots    map[[2]string]string // schema, partition -> root table
+	roots    map[[2]string][2]string // schema, partition -> schema, root table
 	internal string
+	catalogs map[string]bool // system catalog relation -> PUBLIC can read it
 }
 
 // Postgres builds the report for role. conn should belong to an inspecting
@@ -74,7 +75,7 @@ func Postgres(ctx context.Context, conn *pgx.Conn, role string, cls *classificat
 		return nil, err
 	}
 
-	s := &pgState{ctx: ctx, tx: tx, opts: opts, roles: map[uint32]*pgRole{}, internal: opts.internal()}
+	s := &pgState{ctx: ctx, tx: tx, opts: opts, roles: map[uint32]*pgRole{}, internal: opts.internal(), catalogs: map[string]bool{}}
 	if cls != nil {
 		s.cls = cls.Index()
 	}
@@ -301,8 +302,10 @@ func (s *pgState) explain(r relation) string {
 }
 
 func (s *pgState) label(schema, rel, col string) (classification.Column, bool) {
+	// A partition is classified under its root, which may live in another
+	// schema (GitLab keeps partitions in gitlab_partitions_static).
 	if root, ok := s.roots[[2]string{schema, rel}]; ok {
-		rel = root
+		schema, rel = root[0], root[1]
 	}
 	c, ok := s.cls[classification.Key{Schema: schema, Table: rel, Column: col}]
 	return c, ok
@@ -318,9 +321,10 @@ const granteesSQL = `
 // columnFindings covers tables, partitions, materialized views and foreign
 // tables: every column the target or a reachable role can SELECT.
 func (s *pgState) columnFindings() error {
-	s.roots = map[[2]string]string{}
+	s.roots = map[[2]string][2]string{}
 	q := `SELECT n.nspname, c.relname, a.attname, c.relowner,
-			CASE WHEN c.relispartition THEN (SELECT x.relname FROM pg_class x WHERE x.oid = pg_partition_root(c.oid)) END,
+			CASE WHEN c.relispartition THEN (SELECT ARRAY[xn.nspname::text, x.relname::text] FROM pg_class x
+				JOIN pg_namespace xn ON xn.oid = x.relnamespace WHERE x.oid = pg_partition_root(c.oid)) END,
 			` + readersSQL + `, ` + granteesSQL + `
 		FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p', 'm', 'f')
@@ -333,13 +337,13 @@ func (s *pgState) columnFindings() error {
 	var rels []relation
 	for rows.Next() {
 		var r relation
-		var root *string
+		var root []string
 		if err := rows.Scan(&r.schema, &r.rel, &r.col, &r.owner, &root, &r.readers, &r.tblGrantees, &r.colGrantees); err != nil {
 			rows.Close()
 			return err
 		}
-		if root != nil {
-			s.roots[[2]string{r.schema, r.rel}] = *root
+		if len(root) == 2 {
+			s.roots[[2]string{r.schema, r.rel}] = [2]string{root[0], root[1]}
 		}
 		if len(r.readers) > 0 {
 			rels = append(rels, r)
@@ -501,10 +505,36 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 			r.schema, r.rel, r.resolved = base[0].schema, base[0].name, true
 			r.label, r.labeled = s.label(r.schema, r.rel, r.col)
 			r.isPII = r.labeled && r.label.IsPII()
+			if !r.labeled && (r.schema == "pg_catalog" || r.schema == "information_schema") {
+				// What PUBLIC can read in the catalog, a view exposes to no
+				// one new. pg_authid and the like are another matter.
+				public, err := s.publicCatalog(r.schema, r.rel)
+				if err != nil {
+					return nil, err
+				}
+				if public {
+					r.labeled, r.label = true, classification.Column{Label: classification.None}
+				} else if p.untraceable == "" {
+					p.untraceable = "reads " + r.schema + "." + r.rel + ", which PUBLIC cannot read"
+				}
+			}
 		}
 		p.refs = append(p.refs, r)
 	}
 	return p, nil
+}
+
+// publicCatalog reports whether PUBLIC can read a system catalog relation.
+func (s *pgState) publicCatalog(schema, rel string) (bool, error) {
+	k := schema + "." + rel
+	if v, ok := s.catalogs[k]; ok {
+		return v, nil
+	}
+	var v bool
+	err := s.tx.QueryRow(s.ctx, `SELECT coalesce(has_table_privilege('public', to_regclass($1), 'SELECT'), false)`,
+		pgx.Identifier{schema, rel}.Sanitize()).Scan(&v)
+	s.catalogs[k] = v
+	return v, err
 }
 
 var (

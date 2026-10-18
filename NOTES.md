@@ -25,6 +25,10 @@ A record of mistakes made while building maskplan, how each was caught, and what
 | 2026-10-18 | Extension views (`pg_stat_statements`, PostGIS `geometry_columns`) made every role fail, as UNKNOWN or UNLABELED | The managed-service simulation | One WARN per extension view, with a fixture |
 | 2026-10-18 | Mutation testing again: a mutant of the plan comparison did not compile and looked like a survivor, the same error as the day before | Re-ran with build errors visible | Mutation commands now print build failures |
 
+| 2026-10-18 | The report classified a partition under its root's name but the partition's own schema. GitLab keeps partitions in `gitlab_partitions_static` and their roots in `public`, so 3,145 partition columns came out UNLABELED (safe, but noise that hides real findings) | Running report on GitLab's schema | Partitions carry the root's schema too; a fixture puts a partition in another schema |
+| 2026-10-18 | Sampled documents were cut to 256 bytes like other values. AdventureWorks' contact XML spends more than that on namespace declarations, so with enough rows to find its documents the scan saw nothing in them and labeled the column none: recall fell from 0.96 to 0.92 as the sample grew | A larger sample giving a worse result | Documents are read up to 32 KiB; regression test with a 300-byte header |
+| 2026-10-18 | Checked a new fixture against the old code with `git stash`, which also stashed the new fixture, so the check passed and proved nothing | Noticed reading the command back | Re-ran with only the old code restored; the fixture failed as it should |
+
 
 ## Design choices that failed under measurement
 
