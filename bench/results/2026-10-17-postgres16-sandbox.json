@@ -1,0 +1,42 @@
+{
+  "engine": "postgres",
+  "version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "rows": 10000000,
+  "orders": 1000000,
+  "runs": 3,
+  "when": "2026-10-17T19:18:00.823335797Z",
+  "results": [
+    {
+      "query": "Full scan, 10000000 rows, 2 tokenized columns",
+      "unmasked_ns": 588302187,
+      "md5_floor_ns": 5425375975,
+      "masked_ns": 16629590972,
+      "ratio": 28.267090178265818,
+      "md5_floor_ratio": 3.0651499635469963,
+      "overhead_per_row_column_ns": 802,
+      "cpu_per_row_column_ns": 2232,
+      "verdict": "PASS: CPU 2.23 µs/row/col (\u003c= 5 µs), 3.1x md5 floor (\u003c= 4x); v3 gate 28.3x unmasked, md5() alone 9.2x"
+    },
+    {
+      "query": "Lookup of 1000 rows by primary key",
+      "unmasked_ns": 5475893,
+      "masked_ns": 10698237,
+      "ratio": 1.953697232579234,
+      "verdict": "PASS (\u003c 100ms)"
+    },
+    {
+      "query": "Find one user by email (unmasked: indexed raw email; masked: token, no index)",
+      "unmasked_ns": 200261,
+      "masked_ns": 6682949134,
+      "ratio": 33371.196258882155,
+      "verdict": "INFO: known cost until token columns are materialized and indexed"
+    },
+    {
+      "query": "Join 10000000 users to 1000000 orders on email token",
+      "unmasked_ns": 4852454783,
+      "masked_ns": 17254999950,
+      "ratio": 3.555932146024492,
+      "verdict": "INFO (no threshold set)"
+    }
+  ]
+}

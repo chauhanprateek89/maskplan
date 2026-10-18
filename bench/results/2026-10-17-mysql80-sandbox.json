@@ -1,0 +1,42 @@
+{
+  "engine": "mysql",
+  "version": "8.0.46-0ubuntu0.24.04.4",
+  "rows": 10000000,
+  "orders": 1000000,
+  "runs": 3,
+  "when": "2026-10-17T19:25:11.902676959Z",
+  "results": [
+    {
+      "query": "Full scan, 10000000 rows, 2 tokenized columns",
+      "unmasked_ns": 4165284880,
+      "md5_floor_ns": 15897014054,
+      "masked_ns": 52764585537,
+      "ratio": 12.667701503528374,
+      "md5_floor_ratio": 3.319150713320493,
+      "overhead_per_row_column_ns": 2429,
+      "cpu_per_row_column_ns": 2429,
+      "verdict": "PASS: CPU 2.43 µs/row/col (\u003c= 5 µs), 3.3x md5 floor (\u003c= 4x); v3 gate 12.7x unmasked, md5() alone 3.8x"
+    },
+    {
+      "query": "Lookup of 1000 rows by primary key",
+      "unmasked_ns": 7240398,
+      "masked_ns": 12097754,
+      "ratio": 1.6708686456186526,
+      "verdict": "PASS (\u003c 100ms)"
+    },
+    {
+      "query": "Find one user by email (unmasked: indexed raw email; masked: token, no index)",
+      "unmasked_ns": 167516,
+      "masked_ns": 25318509113,
+      "ratio": 151140.84095250603,
+      "verdict": "INFO: known cost until token columns are materialized and indexed"
+    },
+    {
+      "query": "Join 10000000 users to 1000000 orders on email token",
+      "unmasked_ns": 18375347660,
+      "masked_ns": 34293134022,
+      "ratio": 1.8662576978965306,
+      "verdict": "INFO (no threshold set)"
+    }
+  ]
+}
