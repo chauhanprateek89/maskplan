@@ -1,0 +1,266 @@
+{
+  "date": "2026-10-18",
+  "mysql": "8.0.46-0ubuntu0.24.04.4",
+  "runs": [
+    {
+      "sample": 100,
+      "seconds": 0.054046761,
+      "score": {
+        "columns": 89,
+        "pii": {
+          "TP": 13,
+          "FP": 3,
+          "FN": 2
+        },
+        "labels": {
+          "free_text": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.address": {
+            "TP": 1,
+            "FP": 1,
+            "FN": 2
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 6,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          }
+        },
+        "errors": [
+          {
+            "column": "sakila.address.address2",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 100 rows at random (ORDER BY RAND) of about 603"
+          },
+          {
+            "column": "sakila.address.district",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 100 rows at random (ORDER BY RAND) of about 603"
+          },
+          {
+            "column": "sakila.city.city",
+            "want": "none",
+            "got": "user.contact.address",
+            "evidence": "column name \"city\" matches the user.contact.address rule; sampled 100 rows at random (ORDER BY RAND) of about 600"
+          },
+          {
+            "column": "sakila.film.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 100 rows at random (ORDER BY RAND) of about 1000"
+          },
+          {
+            "column": "sakila.film_text.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 100 rows at random (ORDER BY RAND) of about 1000"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 1000,
+      "seconds": 0.097582003,
+      "score": {
+        "columns": 89,
+        "pii": {
+          "TP": 13,
+          "FP": 3,
+          "FN": 2
+        },
+        "labels": {
+          "free_text": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.address": {
+            "TP": 1,
+            "FP": 1,
+            "FN": 2
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 6,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          }
+        },
+        "errors": [
+          {
+            "column": "sakila.address.address2",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 603 rows"
+          },
+          {
+            "column": "sakila.address.district",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 603 rows"
+          },
+          {
+            "column": "sakila.city.city",
+            "want": "none",
+            "got": "user.contact.address",
+            "evidence": "column name \"city\" matches the user.contact.address rule; sampled all 600 rows"
+          },
+          {
+            "column": "sakila.film.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 1000 rows"
+          },
+          {
+            "column": "sakila.film_text.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 1000 rows"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 10000,
+      "seconds": 0.086967722,
+      "score": {
+        "columns": 89,
+        "pii": {
+          "TP": 13,
+          "FP": 3,
+          "FN": 2
+        },
+        "labels": {
+          "free_text": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.address": {
+            "TP": 1,
+            "FP": 1,
+            "FN": 2
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 6,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          }
+        },
+        "errors": [
+          {
+            "column": "sakila.address.address2",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 603 rows"
+          },
+          {
+            "column": "sakila.address.district",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 603 rows"
+          },
+          {
+            "column": "sakila.city.city",
+            "want": "none",
+            "got": "user.contact.address",
+            "evidence": "column name \"city\" matches the user.contact.address rule; sampled all 600 rows"
+          },
+          {
+            "column": "sakila.film.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 1000 rows"
+          },
+          {
+            "column": "sakila.film_text.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 1000 rows"
+          }
+        ]
+      }
+    }
+  ],
+  "source": "Sakila (github.com/jOOQ/sakila, mysql-sakila-db)",
+  "truth": "testdata/sakila/labels.yaml"
+}

@@ -6,24 +6,30 @@ Terraform-style PII policies for Postgres and MySQL, so AI agents query masked d
 
 ## Status
 
-Pre-alpha. What works today, on PostgreSQL 13 to 17:
+Pre-alpha. What works today, on PostgreSQL 13 to 17 and MySQL 8.0 and 8.4:
 
 - `maskplan scan` labels personal data from column names, types and a sample of values, and writes `classification.yaml` for review;
 - `maskplan report --role` lists every labeled column a role can read raw, by which privilege path, and whether its reads are audited. Anything it cannot trace is reported as UNKNOWN, never as masked. See [docs/report.md](docs/report.md).
+- `maskplan plan` and `apply` compile a YAML policy into a login role per agent identity with a schema of masked views (tokens, fake names, generalized dates, prefixes, and row filters on Postgres), audit settings and limits, and then run `report` on every identity to check the result. `destroy` removes it all. See [docs/apply.md](docs/apply.md).
 
-Both only read. Also here:
+On a synthetic Irish bank held out from tuning, `scan` finds every email, IBAN, card number and phone column (recall 1.00 at 100 to 10,000 sampled rows; this is a CI gate), with 0.87 precision and recall for personal data overall. On AdventureWorks, which it was tuned on, 0.86 precision and 0.96 recall. On GitLab's 11,000-column schema with no data, 0.92 precision outside free text and recall of about 0.74. Method, misses and gaps: [docs/accuracy.md](docs/accuracy.md). Managed services (RDS, Cloud SQL, Azure) are simulated in CI, not yet tested for real.
+
+`scan` and `report` only read. Also here:
 
 - the [token specification](docs/token-spec.md), with a Go reference implementation and generated Postgres and MySQL SQL that produce identical tokens;
 - shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI;
 - a [benchmark](bench/README.md) of what masking costs on a 10-million-row table.
 
-Next: `scan` and `report` on MySQL, then `apply`.
+Next: a run on real managed services.
 
 ```bash
 go install github.com/chauhanprateek89/maskplan/cmd/maskplan@latest
 export MASKPLAN_DSN=postgres://admin@db.internal:5432/app
 maskplan scan                       # writes classification.yaml; review and commit it
 maskplan report --role ai_agent     # exit 1 if raw personal data is reachable
+maskplan init                       # a starter maskplan.yaml from the classification
+maskplan plan                       # the SQL apply would run
+maskplan apply --yes                # masked views and roles, then a report on each
 ```
 
 ```
@@ -77,8 +83,8 @@ go test ./...                       # unit tests and vector freshness
 python3 scripts/check_vectors.py    # independent check of the vectors
 go run ./cmd/genvectors             # regenerate testdata/vectors.json after changing cases
 
-# Vectors, scan and report fixtures against live databases. The report
-# fixtures create cluster-wide roles named mpt_*; use a throwaway server
+# Vectors, scan, report and apply fixtures against live databases. The
+# fixtures create cluster-wide roles named mpt_*, mpa_* and mpc_*; use a throwaway server
 # and a superuser DSN. -p 1 keeps packages from seeing each other's grants.
 MASKPLAN_TEST_POSTGRES_DSN=postgres://user:pass@localhost:5432/db \
 MASKPLAN_TEST_MYSQL_DSN='user:pass@tcp(127.0.0.1:3306)/db' \
@@ -89,14 +95,24 @@ go test ./... -p 1 -v
 | --- | --- |
 | `cmd/maskplan` | The CLI |
 | `internal/classify`, `internal/classification` | Column classifier and `classification.yaml` |
-| `internal/scan` | Postgres scanner |
+| `internal/scan` | Postgres and MySQL scanners |
 | `internal/report` | Exposure report and its adversarial fixtures |
+| `internal/policy`, `internal/compile`, `internal/apply` | `maskplan.yaml`, the compiler from policy to SQL, and running it |
 | `internal/token` | Go reference implementation of the token spec |
 | `internal/sqlexpr` | Postgres and MySQL expression generators, and the live-database vector tests |
 | `internal/vectors`, `testdata/vectors.json` | Shared test vectors and their generator |
 | `bench/` | Benchmark harness and Docker Compose setup |
 | `docs/token-spec.md` | Token specification, version 1 |
 | `docs/report.md` | What scan and report check, statuses and limitations |
+| `docs/apply.md` | The policy file, transforms, and what apply creates |
+| `docs/accuracy.md` | Classifier precision and recall, and how they are measured |
+| `internal/fintech`, `testdata/fintech` | Synthetic Irish bank: generator, schema and ground truth |
+| `testdata/adventureworks` | Ground truth for AdventureWorks |
+| `testdata/gitlab` | Hand review of a scan of GitLab's schema |
+| `testdata/sakila` | Ground truth for Sakila (MySQL) |
+| `testdata/managed` | Simulated managed-service Postgres for CI |
+| `bench/accuracy`, `bench/fintech` | Accuracy runner and synthetic-bank loader |
+| `SECURITY.md` | How to report a vulnerability, and the UNKNOWN-never-MASKED guarantee |
 
 ## License
 

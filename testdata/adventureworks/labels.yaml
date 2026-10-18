@@ -1,0 +1,44 @@
+# Ground truth for AdventureWorks (lorint/AdventureWorks-for-Postgres port of
+# Microsoft's AdventureWorks 2014 OLTP sample). Every column of every table
+# and materialized view in the five schemas not listed here is "none".
+#
+# Judgments, written before tuning the classifier against this data:
+# - Surrogate keys (businessentityid, customerid, personid) are none: they
+#   identify a row, and the columns that identify the person are labeled.
+# - Business identifiers shown to customers (salesorderheader.accountnumber,
+#   employee.loginid) are user.unique_id. Vendor account numbers belong to
+#   companies and are none.
+# - XML documents about people (person.demographics, additionalcontactinfo,
+#   jobcandidate.resume) are free_text; product and store documents are none.
+# - Salary (employeepayhistory.rate) and card expiry are personal data with
+#   no label in maskplan's set yet; they are none here and listed as gaps.
+version: 1
+source: AdventureWorks-for-Postgres (install.sql from github.com/lorint/AdventureWorks-for-Postgres), AdventureWorks 2014 OLTP CSVs
+schemas: [person, humanresources, production, purchasing, sales]
+columns:
+  - {schema: humanresources, table: employee, column: nationalidnumber, label: user.government_id}
+  - {schema: humanresources, table: employee, column: loginid, label: user.unique_id}
+  - {schema: humanresources, table: employee, column: birthdate, label: user.demographic.date_of_birth}
+  - {schema: humanresources, table: employee, column: maritalstatus, label: user.demographic.marital_status}
+  - {schema: humanresources, table: employee, column: gender, label: user.demographic.gender}
+  - {schema: humanresources, table: jobcandidate, column: resume, label: free_text}
+  - {schema: person, table: address, column: addressline1, label: user.contact.address}
+  - {schema: person, table: address, column: addressline2, label: user.contact.address}
+  - {schema: person, table: address, column: city, label: user.contact.address}
+  - {schema: person, table: address, column: postalcode, label: user.contact.address.postal_code}
+  - {schema: person, table: address, column: spatiallocation, label: user.contact.address}
+  - {schema: person, table: emailaddress, column: emailaddress, label: user.contact.email}
+  - {schema: person, table: password, column: passwordhash, label: system.authentication}
+  - {schema: person, table: password, column: passwordsalt, label: system.authentication}
+  - {schema: person, table: person, column: firstname, label: user.name}
+  - {schema: person, table: person, column: middlename, label: user.name}
+  - {schema: person, table: person, column: lastname, label: user.name}
+  - {schema: person, table: person, column: additionalcontactinfo, label: free_text}
+  - {schema: person, table: person, column: demographics, label: free_text}
+  - {schema: person, table: personphone, column: phonenumber, label: user.contact.phone}
+  - {schema: production, table: productreview, column: reviewername, label: user.name}
+  - {schema: production, table: productreview, column: emailaddress, label: user.contact.email}
+  - {schema: production, table: productreview, column: comments, label: free_text}
+  - {schema: sales, table: creditcard, column: cardnumber, label: user.financial.credit_card}
+  - {schema: sales, table: salesorderheader, column: accountnumber, label: user.unique_id}
+  - {schema: sales, table: salesorderheader, column: comment, label: free_text}

@@ -1,0 +1,1022 @@
+{
+  "truth": "testdata/adventureworks/labels.yaml",
+  "source": "AdventureWorks-for-Postgres (install.sql from github.com/lorint/AdventureWorks-for-Postgres), AdventureWorks 2014 OLTP CSVs",
+  "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+  "date": "2026-10-18",
+  "runs": [
+    {
+      "sample": 100,
+      "seconds": 0.235063038,
+      "score": {
+        "columns": 468,
+        "pii": {
+          "TP": 20,
+          "FP": 33,
+          "FN": 6
+        },
+        "labels": {
+          "free_text": {
+            "TP": 5,
+            "FP": 7,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 3,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.demographic.marital_status": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.financial.bank_account": {
+            "TP": 0,
+            "FP": 1,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.government_id": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.name": {
+            "TP": 3,
+            "FP": 23,
+            "FN": 1
+          },
+          "user.unique_id": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 2
+          }
+        },
+        "errors": [
+          {
+            "column": "humanresources.department.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 16 rows"
+          },
+          {
+            "column": "humanresources.employee.gender",
+            "want": "user.demographic.gender",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 103 rows with TABLESAMPLE BERNOULLI (34.5%) of about 290"
+          },
+          {
+            "column": "humanresources.employee.loginid",
+            "want": "user.unique_id",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 103 rows with TABLESAMPLE BERNOULLI (34.5%) of about 290"
+          },
+          {
+            "column": "humanresources.employee.maritalstatus",
+            "want": "user.demographic.marital_status",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 103 rows with TABLESAMPLE BERNOULLI (34.5%) of about 290"
+          },
+          {
+            "column": "humanresources.employee.nationalidnumber",
+            "want": "user.government_id",
+            "got": "user.contact.phone",
+            "evidence": "103 of 103 sampled values are phone numbers; sampled 103 rows with TABLESAMPLE BERNOULLI (34.5%) of about 290"
+          },
+          {
+            "column": "humanresources.shift.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 3 rows"
+          },
+          {
+            "column": "person.address.spatiallocation",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched"
+          },
+          {
+            "column": "person.addresstype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 6 rows"
+          },
+          {
+            "column": "person.contacttype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 20 rows"
+          },
+          {
+            "column": "person.countryregion.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 96 rows with TABLESAMPLE BERNOULLI (42%) of about 238"
+          },
+          {
+            "column": "person.password.passwordsalt",
+            "want": "system.authentication",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 95 rows with TABLESAMPLE BERNOULLI (0.501%) of about 19972"
+          },
+          {
+            "column": "person.phonenumbertype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 3 rows"
+          },
+          {
+            "column": "person.stateprovince.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 100 rows with TABLESAMPLE BERNOULLI (55.2%) of about 181"
+          },
+          {
+            "column": "production.culture.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 8 rows"
+          },
+          {
+            "column": "production.illustration.diagram",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
+          },
+          {
+            "column": "production.location.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 14 rows"
+          },
+          {
+            "column": "production.product.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 94 rows with TABLESAMPLE BERNOULLI (19.8%) of about 504"
+          },
+          {
+            "column": "production.productcategory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 4 rows"
+          },
+          {
+            "column": "production.productdescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 100 rows with TABLESAMPLE BERNOULLI (13.1%) of about 762"
+          },
+          {
+            "column": "production.productmodel.catalogdescription",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
+          },
+          {
+            "column": "production.productmodel.instructions",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
+          },
+          {
+            "column": "production.productmodel.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
+          },
+          {
+            "column": "production.productreview.reviewername",
+            "want": "user.name",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 4 rows"
+          },
+          {
+            "column": "production.productsubcategory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 37 rows"
+          },
+          {
+            "column": "production.scrapreason.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 16 rows"
+          },
+          {
+            "column": "production.unitmeasure.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 38 rows"
+          },
+          {
+            "column": "production.vproductanddescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 96 rows with TABLESAMPLE BERNOULLI (5.67%) of about 1764"
+          },
+          {
+            "column": "production.vproductanddescription.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 96 rows with TABLESAMPLE BERNOULLI (5.67%) of about 1764"
+          },
+          {
+            "column": "purchasing.shipmethod.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 5 rows"
+          },
+          {
+            "column": "purchasing.vendor.accountnumber",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 98 rows with TABLESAMPLE BERNOULLI (96.2%) of about 104"
+          },
+          {
+            "column": "purchasing.vendor.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 98 rows with TABLESAMPLE BERNOULLI (96.2%) of about 104"
+          },
+          {
+            "column": "sales.creditcard.cardnumber",
+            "want": "user.financial.credit_card",
+            "got": "user.contact.phone",
+            "evidence": "91 of 91 sampled values are phone numbers; sampled 91 rows with TABLESAMPLE BERNOULLI (0.523%) of about 19118"
+          },
+          {
+            "column": "sales.currency.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 98 rows with TABLESAMPLE BERNOULLI (95.2%) of about 105"
+          },
+          {
+            "column": "sales.customer.customerid",
+            "want": "none",
+            "got": "user.unique_id",
+            "evidence": "column name \"customerid\" matches the user.unique_id rule"
+          },
+          {
+            "column": "sales.salesorderheader.accountnumber",
+            "want": "user.unique_id",
+            "got": "user.contact.phone",
+            "evidence": "97 of 97 sampled values are phone numbers; sampled 97 rows with TABLESAMPLE BERNOULLI (0.318%) of about 31465"
+          },
+          {
+            "column": "sales.salesorderheader.customerid",
+            "want": "none",
+            "got": "user.unique_id",
+            "evidence": "column name \"customerid\" matches the user.unique_id rule"
+          },
+          {
+            "column": "sales.salesreason.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 10 rows"
+          },
+          {
+            "column": "sales.salestaxrate.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 29 rows"
+          },
+          {
+            "column": "sales.salesterritory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 10 rows"
+          },
+          {
+            "column": "sales.specialoffer.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
+          },
+          {
+            "column": "sales.store.demographics",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled 106 rows with TABLESAMPLE BERNOULLI (14.3%) of about 701"
+          },
+          {
+            "column": "sales.store.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 106 rows with TABLESAMPLE BERNOULLI (14.3%) of about 701"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 1000,
+      "seconds": 0.411839393,
+      "score": {
+        "columns": 468,
+        "pii": {
+          "TP": 20,
+          "FP": 33,
+          "FN": 6
+        },
+        "labels": {
+          "free_text": {
+            "TP": 5,
+            "FP": 7,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 3,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.demographic.marital_status": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.financial.bank_account": {
+            "TP": 0,
+            "FP": 1,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.government_id": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.name": {
+            "TP": 3,
+            "FP": 23,
+            "FN": 1
+          },
+          "user.unique_id": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 2
+          }
+        },
+        "errors": [
+          {
+            "column": "humanresources.department.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 16 rows"
+          },
+          {
+            "column": "humanresources.employee.gender",
+            "want": "user.demographic.gender",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.employee.loginid",
+            "want": "user.unique_id",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.employee.maritalstatus",
+            "want": "user.demographic.marital_status",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.employee.nationalidnumber",
+            "want": "user.government_id",
+            "got": "user.contact.phone",
+            "evidence": "289 of 290 sampled values are phone numbers; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.shift.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 3 rows"
+          },
+          {
+            "column": "person.address.spatiallocation",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched"
+          },
+          {
+            "column": "person.addresstype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 6 rows"
+          },
+          {
+            "column": "person.contacttype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 20 rows"
+          },
+          {
+            "column": "person.countryregion.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 238 rows"
+          },
+          {
+            "column": "person.password.passwordsalt",
+            "want": "system.authentication",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 944 rows with TABLESAMPLE BERNOULLI (5.01%) of about 19972"
+          },
+          {
+            "column": "person.phonenumbertype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 3 rows"
+          },
+          {
+            "column": "person.stateprovince.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 181 rows"
+          },
+          {
+            "column": "production.culture.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 8 rows"
+          },
+          {
+            "column": "production.illustration.diagram",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
+          },
+          {
+            "column": "production.location.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 14 rows"
+          },
+          {
+            "column": "production.product.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 504 rows"
+          },
+          {
+            "column": "production.productcategory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 4 rows"
+          },
+          {
+            "column": "production.productdescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 762 rows"
+          },
+          {
+            "column": "production.productmodel.catalogdescription",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.productmodel.instructions",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.productmodel.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 128 rows"
+          },
+          {
+            "column": "production.productreview.reviewername",
+            "want": "user.name",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 4 rows"
+          },
+          {
+            "column": "production.productsubcategory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 37 rows"
+          },
+          {
+            "column": "production.scrapreason.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 16 rows"
+          },
+          {
+            "column": "production.unitmeasure.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 38 rows"
+          },
+          {
+            "column": "production.vproductanddescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 990 rows with TABLESAMPLE BERNOULLI (56.7%) of about 1764"
+          },
+          {
+            "column": "production.vproductanddescription.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled 990 rows with TABLESAMPLE BERNOULLI (56.7%) of about 1764"
+          },
+          {
+            "column": "purchasing.shipmethod.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 5 rows"
+          },
+          {
+            "column": "purchasing.vendor.accountnumber",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled all 104 rows"
+          },
+          {
+            "column": "purchasing.vendor.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 104 rows"
+          },
+          {
+            "column": "sales.creditcard.cardnumber",
+            "want": "user.financial.credit_card",
+            "got": "user.contact.phone",
+            "evidence": "928 of 928 sampled values are phone numbers; sampled 928 rows with TABLESAMPLE BERNOULLI (5.23%) of about 19118"
+          },
+          {
+            "column": "sales.currency.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 105 rows"
+          },
+          {
+            "column": "sales.customer.customerid",
+            "want": "none",
+            "got": "user.unique_id",
+            "evidence": "column name \"customerid\" matches the user.unique_id rule"
+          },
+          {
+            "column": "sales.salesorderheader.accountnumber",
+            "want": "user.unique_id",
+            "got": "user.contact.phone",
+            "evidence": "975 of 975 sampled values are phone numbers; sampled 975 rows with TABLESAMPLE BERNOULLI (3.18%) of about 31465"
+          },
+          {
+            "column": "sales.salesorderheader.customerid",
+            "want": "none",
+            "got": "user.unique_id",
+            "evidence": "column name \"customerid\" matches the user.unique_id rule"
+          },
+          {
+            "column": "sales.salesreason.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 10 rows"
+          },
+          {
+            "column": "sales.salestaxrate.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 29 rows"
+          },
+          {
+            "column": "sales.salesterritory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 10 rows"
+          },
+          {
+            "column": "sales.specialoffer.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
+          },
+          {
+            "column": "sales.store.demographics",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 701 rows"
+          },
+          {
+            "column": "sales.store.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 701 rows"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 10000,
+      "seconds": 2.095190772,
+      "score": {
+        "columns": 468,
+        "pii": {
+          "TP": 20,
+          "FP": 33,
+          "FN": 6
+        },
+        "labels": {
+          "free_text": {
+            "TP": 5,
+            "FP": 7,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 3,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.demographic.marital_status": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.financial.bank_account": {
+            "TP": 0,
+            "FP": 1,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.government_id": {
+            "TP": 0,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.name": {
+            "TP": 3,
+            "FP": 23,
+            "FN": 1
+          },
+          "user.unique_id": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 2
+          }
+        },
+        "errors": [
+          {
+            "column": "humanresources.department.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 16 rows"
+          },
+          {
+            "column": "humanresources.employee.gender",
+            "want": "user.demographic.gender",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.employee.loginid",
+            "want": "user.unique_id",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.employee.maritalstatus",
+            "want": "user.demographic.marital_status",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.employee.nationalidnumber",
+            "want": "user.government_id",
+            "got": "user.contact.phone",
+            "evidence": "289 of 290 sampled values are phone numbers; sampled all 290 rows"
+          },
+          {
+            "column": "humanresources.shift.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 3 rows"
+          },
+          {
+            "column": "person.address.spatiallocation",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched"
+          },
+          {
+            "column": "person.addresstype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 6 rows"
+          },
+          {
+            "column": "person.contacttype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 20 rows"
+          },
+          {
+            "column": "person.countryregion.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 238 rows"
+          },
+          {
+            "column": "person.password.passwordsalt",
+            "want": "system.authentication",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 10065 rows with TABLESAMPLE BERNOULLI (50.1%) of about 19972"
+          },
+          {
+            "column": "person.phonenumbertype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 3 rows"
+          },
+          {
+            "column": "person.stateprovince.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 181 rows"
+          },
+          {
+            "column": "production.culture.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 8 rows"
+          },
+          {
+            "column": "production.illustration.diagram",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
+          },
+          {
+            "column": "production.location.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 14 rows"
+          },
+          {
+            "column": "production.product.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 504 rows"
+          },
+          {
+            "column": "production.productcategory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 4 rows"
+          },
+          {
+            "column": "production.productdescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 762 rows"
+          },
+          {
+            "column": "production.productmodel.catalogdescription",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.productmodel.instructions",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.productmodel.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 128 rows"
+          },
+          {
+            "column": "production.productreview.reviewername",
+            "want": "user.name",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 4 rows"
+          },
+          {
+            "column": "production.productsubcategory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 37 rows"
+          },
+          {
+            "column": "production.scrapreason.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 16 rows"
+          },
+          {
+            "column": "production.unitmeasure.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 38 rows"
+          },
+          {
+            "column": "production.vproductanddescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 1764 rows"
+          },
+          {
+            "column": "production.vproductanddescription.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 1764 rows"
+          },
+          {
+            "column": "purchasing.shipmethod.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 5 rows"
+          },
+          {
+            "column": "purchasing.vendor.accountnumber",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled all 104 rows"
+          },
+          {
+            "column": "purchasing.vendor.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 104 rows"
+          },
+          {
+            "column": "sales.creditcard.cardnumber",
+            "want": "user.financial.credit_card",
+            "got": "user.contact.phone",
+            "evidence": "10049 of 10049 sampled values are phone numbers; sampled 10049 rows with TABLESAMPLE BERNOULLI (52.3%) of about 19118"
+          },
+          {
+            "column": "sales.currency.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 105 rows"
+          },
+          {
+            "column": "sales.customer.customerid",
+            "want": "none",
+            "got": "user.unique_id",
+            "evidence": "column name \"customerid\" matches the user.unique_id rule"
+          },
+          {
+            "column": "sales.salesorderheader.accountnumber",
+            "want": "user.unique_id",
+            "got": "user.contact.phone",
+            "evidence": "9990 of 9990 sampled values are phone numbers; sampled 9990 rows with TABLESAMPLE BERNOULLI (31.8%) of about 31465"
+          },
+          {
+            "column": "sales.salesorderheader.customerid",
+            "want": "none",
+            "got": "user.unique_id",
+            "evidence": "column name \"customerid\" matches the user.unique_id rule"
+          },
+          {
+            "column": "sales.salesreason.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 10 rows"
+          },
+          {
+            "column": "sales.salestaxrate.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 29 rows"
+          },
+          {
+            "column": "sales.salesterritory.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 10 rows"
+          },
+          {
+            "column": "sales.specialoffer.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
+          },
+          {
+            "column": "sales.store.demographics",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 701 rows"
+          },
+          {
+            "column": "sales.store.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column name \"name\" matches the user.name rule; sampled all 701 rows"
+          }
+        ]
+      }
+    }
+  ]
+}

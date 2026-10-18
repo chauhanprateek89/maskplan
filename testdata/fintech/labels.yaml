@@ -1,0 +1,57 @@
+# Ground truth for testdata/fintech/schema.sql, loaded into schema "fintech"
+# by internal/fintech. Every column not listed is "none". Written before the
+# classifier was first run on this schema.
+#
+# Judgments:
+# - county and town are part of a postal address; nationality, occupation,
+#   income and user agent are personal data with no maskplan label yet, so
+#   they are none here and listed as gaps.
+# - sort codes and BICs identify a bank branch, not a person: none.
+#   account_number is the customer's own account: bank account.
+# - The last four digits of a card are not cardholder data under PCI DSS.
+# - Payment references, ticket subjects and transaction descriptions are
+#   free text: people type names into them.
+# - Surrogate keys (id, customer_id) are none.
+version: 1
+source: maskplan testdata/fintech (synthetic)
+schemas: [fintech]
+columns:
+  - {schema: fintech, table: customers, column: customer_ref, label: user.unique_id}
+  - {schema: fintech, table: customers, column: first_name, label: user.name}
+  - {schema: fintech, table: customers, column: last_name, label: user.name}
+  - {schema: fintech, table: customers, column: date_of_birth, label: user.demographic.date_of_birth}
+  - {schema: fintech, table: customers, column: ppsn, label: user.government_id}
+  - {schema: fintech, table: customers, column: email, label: user.contact.email}
+  - {schema: fintech, table: customers, column: mobile, label: user.contact.phone}
+  - {schema: fintech, table: customers, column: home_phone, label: user.contact.phone}
+  - {schema: fintech, table: customers, column: address_line_1, label: user.contact.address}
+  - {schema: fintech, table: customers, column: address_line_2, label: user.contact.address}
+  - {schema: fintech, table: customers, column: town, label: user.contact.address}
+  - {schema: fintech, table: customers, column: county, label: user.contact.address}
+  - {schema: fintech, table: customers, column: eircode, label: user.contact.address.postal_code}
+  - {schema: fintech, table: customers, column: gender, label: user.demographic.gender}
+  - {schema: fintech, table: customers, column: kyc_payload, label: free_text}
+  - {schema: fintech, table: accounts, column: iban, label: user.financial.bank_account}
+  - {schema: fintech, table: accounts, column: account_number, label: user.financial.bank_account}
+  - {schema: fintech, table: cards, column: pan, label: user.financial.credit_card}
+  - {schema: fintech, table: cards, column: cardholder_name, label: user.name}
+  - {schema: fintech, table: payees, column: payee_name, label: user.name}
+  - {schema: fintech, table: payees, column: payee_iban, label: user.financial.bank_account}
+  - {schema: fintech, table: payees, column: reference, label: free_text}
+  - {schema: fintech, table: transactions, column: counterparty_name, label: user.name}
+  - {schema: fintech, table: transactions, column: counterparty_iban, label: user.financial.bank_account}
+  - {schema: fintech, table: transactions, column: description, label: free_text}
+  - {schema: fintech, table: transactions, column: device_ip, label: user.device.ip_address}
+  - {schema: fintech, table: support_tickets, column: contact_value, label: user.contact.email}
+  - {schema: fintech, table: support_tickets, column: callback, label: user.contact.phone}
+  - {schema: fintech, table: support_tickets, column: subject, label: free_text}
+  - {schema: fintech, table: support_tickets, column: body, label: free_text}
+  - {schema: fintech, table: login_events, column: source_addr, label: user.device.ip_address}
+  - {schema: fintech, table: staff, column: staff_no, label: user.unique_id}
+  - {schema: fintech, table: staff, column: display_name, label: user.name}
+  - {schema: fintech, table: staff, column: work_email, label: user.contact.email}
+  - {schema: fintech, table: staff, column: msisdn, label: user.contact.phone}
+  - {schema: fintech, table: card_disputes, column: card, label: user.financial.credit_card}
+  - {schema: fintech, table: card_disputes, column: notes, label: free_text}
+  - {schema: fintech, table: legacy_import, column: col_a, label: user.financial.bank_account}
+  - {schema: fintech, table: legacy_import, column: col_b, label: user.financial.credit_card}

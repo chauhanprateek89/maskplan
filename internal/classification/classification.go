@@ -45,7 +45,11 @@ type Column struct {
 	Label      string   `yaml:"label"`
 	Confidence float64  `yaml:"confidence"`
 	Evidence   []string `yaml:"evidence,omitempty"`
-	Reviewed   bool     `yaml:"reviewed"`
+	// DerivedFrom names the column in the same table this one holds tokens
+	// of (email_tok of email). It carries the source's label. The report
+	// does not count it as masked until it can verify what fills it.
+	DerivedFrom string `yaml:"derived_from,omitempty"`
+	Reviewed    bool   `yaml:"reviewed"`
 }
 
 // Key identifies a column.
