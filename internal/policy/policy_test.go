@@ -91,3 +91,47 @@ func TestDecide(t *testing.T) {
 		t.Errorf("override applied to another source: %+v", d)
 	}
 }
+
+func TestStarter(t *testing.T) {
+	cls := &classification.File{Version: classification.Version, Source: classification.Source{Engine: "mysql"}}
+	for _, c := range [][3]string{
+		{"app", "customers", "user.contact.email"}, {"app", "customers", "user.name"}, {"app", "customers", "free_text"},
+		{"app", "customers", "user.contact.address.postal_code"}, {"app", "customers", "none"},
+		{"app", "customers", "user.health.condition"}, {"billing", "cards", "user.financial.credit_card"},
+	} {
+		cls.Columns = append(cls.Columns, classification.Column{Schema: c[0], Table: c[1], Column: strings.ReplaceAll(c[2], ".", "_"), Label: c[2]})
+	}
+	text, err := Starter(cls, "ai_agent", "classification.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := load(t, text)
+	if err != nil {
+		t.Fatalf("the starter does not load: %v\n%s", err, text)
+	}
+	id := p.Identities["ai_agent"]
+	if p.Sources["app"].Engine != "mysql" || id.Password != "env:AI_AGENT_PASSWORD" || strings.Join(id.Tables, ",") != "app.customers,billing.cards" {
+		t.Errorf("source %+v, identity %+v", p.Sources["app"], id)
+	}
+	if strings.Contains(text, "statement_timeout") || strings.Contains(text, "audit:") {
+		t.Error("MySQL starter sets options MySQL does not support")
+	}
+	for label, want := range map[string]string{"user.contact.email": Token, "user.name": FakeName,
+		"user.contact.address.postal_code": Prefix, "user.financial.credit_card": Exclude, "user.health.condition": Exclude} {
+		if d := p.Decide("app", classification.Column{Schema: "app", Table: "customers", Column: "x", Label: label}, true); d.Transform != want {
+			t.Errorf("%s: %s, want %s", label, d.Transform, want)
+		}
+	}
+	if d := p.Decide("app", classification.Column{Schema: "app", Table: "customers", Column: "notes", Label: "free_text"}, true); d.Transform != Null {
+		t.Errorf("free text: %s, want null", d.Transform)
+	}
+	if !strings.Contains(text, "free_text (1 column): decided by defaults.free_text") {
+		t.Errorf("free text not explained:\n%s", text)
+	}
+	if !strings.Contains(text, "user.health.condition (1 column): no suggestion") {
+		t.Errorf("unknown label not called out:\n%s", text)
+	}
+	if _, err := Starter(&classification.File{Version: 1}, "ai_agent", "c.yaml"); err == nil {
+		t.Error("empty classification accepted")
+	}
+}

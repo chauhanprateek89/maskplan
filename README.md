@@ -27,7 +27,8 @@ go install github.com/chauhanprateek89/maskplan/cmd/maskplan@latest
 export MASKPLAN_DSN=postgres://admin@db.internal:5432/app
 maskplan scan                       # writes classification.yaml; review and commit it
 maskplan report --role ai_agent     # exit 1 if raw personal data is reachable
-maskplan plan                       # with a maskplan.yaml: the SQL apply would run
+maskplan init                       # a starter maskplan.yaml from the classification
+maskplan plan                       # the SQL apply would run
 maskplan apply --yes                # masked views and roles, then a report on each
 ```
 

@@ -4,6 +4,7 @@
 
 ```bash
 maskplan scan --dsn "$ADMIN_DSN"          # classification.yaml: review it and commit it
+maskplan init                             # maskplan.yaml: a commented starter policy to review
 maskplan plan                             # print the SQL apply would run; changes nothing
 maskplan apply --yes                      # run it in one transaction, then report on every identity
 maskplan report --dsn "$ADMIN_DSN" --role support_agent --policy maskplan.yaml
@@ -13,6 +14,8 @@ maskplan destroy --yes                    # drop everything apply created, the k
 `apply` without `--yes` prints the plan and changes nothing. After applying, it runs `report --policy` on every identity of the source and exits 1 if any report fails: the views are checked by the same code an auditor would run, not trusted because apply wrote them.
 
 ## The policy
+
+`maskplan init` writes a starter from `classification.yaml`: one identity (`--identity`, default `ai_agent`) reading every classified table, and one rule per label found, with conservative suggestions. Emails, phones, IP addresses and usernames are tokenized. Names become fake names, birth dates their year, and postcodes their first three characters. Street addresses, government IDs, bank accounts, cards, secrets, gender and marital status are excluded. Each rule carries a comment with its column count and reason; review them all. It never overwrites an existing file.
 
 ```yaml
 version: 1

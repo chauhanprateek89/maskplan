@@ -261,6 +261,13 @@ rules:
 		return out.String()
 	}
 	cmd(0, "scan", "--dsn", dsn, "--schema", "mpc_app", "--out", dir+"/classification.yaml")
+	// init drafts a policy that loads and plans; it never overwrites one.
+	t.Setenv("MASKPLAN_DSN", dsn)
+	cmd(0, "init", "--classification", dir+"/classification.yaml", "--identity", "mpc_draft", "--out", dir+"/draft.yaml")
+	if out := cmd(0, "plan", "--policy", dir+"/draft.yaml", "--internal-schema", "mpc_internal"); !strings.Contains(out, `CREATE VIEW "mpc_draft"."customers"`) {
+		t.Errorf("plan of the starter policy:\n%s", out)
+	}
+	cmd(2, "init", "--classification", dir+"/classification.yaml", "--out", dir+"/draft.yaml")
 	exists := func() bool {
 		var ok bool
 		if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = 'mpc_reader')").Scan(&ok); err != nil {
