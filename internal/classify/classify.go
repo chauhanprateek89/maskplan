@@ -1,0 +1,275 @@
+// Package classify assigns PII labels to columns from their names, types and
+// a bounded sample of values. Labels follow the Fides data-category taxonomy
+// where one fits. Detection is deliberately simple and explainable: every
+// label carries the evidence that produced it, for a person to review.
+package classify
+
+import (
+	"fmt"
+	"math/big"
+	"net/netip"
+	"regexp"
+	"strings"
+
+	"github.com/chauhanprateek89/maskplan/internal/classification"
+)
+
+// Labels assigned by the classifier.
+const (
+	Email      = "user.contact.email"
+	Phone      = "user.contact.phone"
+	Name       = "user.name"
+	Address    = "user.contact.address"
+	PostalCode = "user.contact.address.postal_code"
+	BirthDate  = "user.demographic.date_of_birth"
+	NationalID = "user.government_id"
+	IBAN       = "user.financial.bank_account"
+	CardNumber = "user.financial.credit_card"
+	IPAddress  = "user.device.ip_address"
+	UniqueID   = "user.unique_id"
+	Secret     = "system.authentication"
+	FreeText   = classification.FreeText
+	None       = classification.None
+)
+
+// nameRule maps a column-name pattern to a label. Patterns match the whole
+// normalized name (lowercase, separators removed).
+type nameRule struct {
+	label string
+	re    *regexp.Regexp
+}
+
+var nameRules = []nameRule{
+	{Email, regexp.MustCompile(`^(.*_)?(e_?mail|email_?address|mail)(_.*)?$`)},
+	{Phone, regexp.MustCompile(`^(.*_)?(phone|telephone|mobile|msisdn|cell|fax)(_?(number|no|num))?(_.*)?$`)},
+	{Name, regexp.MustCompile(`^(.*_)?(first_?name|last_?name|full_?name|surname|given_?name|family_?name|middle_?name|forename|display_?name|customer_?name|contact_?name|name)$`)},
+	{IPAddress, regexp.MustCompile(`^(.*_)?(ip|ip_?addr(ess)?|client_?ip|remote_?addr)$`)},
+	{PostalCode, regexp.MustCompile(`^(.*_)?(post_?code|postal_?code|zip|zip_?code|eircode)$`)},
+	{Address, regexp.MustCompile(`^(.*_)?(address|addr|street|address_?line_?\d*|city|town)$`)},
+	{BirthDate, regexp.MustCompile(`^(.*_)?(dob|date_?of_?birth|birth_?date|birthday|birth_?dt)$`)},
+	{NationalID, regexp.MustCompile(`^(.*_)?(ssn|nin|ni_?number|pps_?n?o?|ppsn|national_?id|tax_?id|passport_?(no|number)?|driving_?licen[cs]e(_?(no|number))?)$`)},
+	{IBAN, regexp.MustCompile(`^(.*_)?(iban|bank_?account(_?(no|number))?|account_?number|sort_?code|bic)$`)},
+	{CardNumber, regexp.MustCompile(`^(.*_)?(pan|card_?(no|number|num)|credit_?card(_?number)?|cc_?(no|number|num))$`)},
+	{Secret, regexp.MustCompile(`^(.*_)?(password|passwd|pwd|password_?hash|secret|api_?key|token|access_?token|refresh_?token|private_?key|otp_?secret)$`)},
+	{UniqueID, regexp.MustCompile(`^(.*_)?(customer_?(no|number|id|ref)|account_?(id|no|ref)|member_?(no|number|id)|client_?(id|no|ref)|user_?id)$`)},
+	{FreeText, regexp.MustCompile(`^(.*_)?(notes?|comments?|remarks?|message|description|bio|free_?text|body)$`)},
+}
+
+// normalizeName lowercases a column name and converts camelCase and
+// separators to underscores, so firstName, first-name and FIRST_NAME match.
+func normalizeName(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			if i > 0 && !strings.HasSuffix(b.String(), "_") {
+				prev := s[i-1]
+				if prev >= 'a' && prev <= 'z' {
+					b.WriteByte('_')
+				}
+			}
+			b.WriteRune(r + ('a' - 'A'))
+		case r == '-' || r == ' ' || r == '.':
+			b.WriteByte('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// ByName returns the label suggested by a column name, or "".
+func ByName(column string) string {
+	n := normalizeName(column)
+	for _, r := range nameRules {
+		if r.re.MatchString(n) {
+			return r.label
+		}
+	}
+	return ""
+}
+
+// Value detectors. Each must be specific enough that most matches in a
+// sample really are that kind of value.
+var (
+	emailRe = regexp.MustCompile(`^[A-Za-z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$`)
+	phoneRe = regexp.MustCompile(`^\+?[0-9 ()./-]{7,24}$`)
+	ibanRe  = regexp.MustCompile(`^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$`)
+	panRe   = regexp.MustCompile(`^[0-9]{13,19}$`)
+	// Dates and decimal amounts have phone-like shapes; exclude them.
+	notPhoneRe = regexp.MustCompile(`^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|-?\d+\.\d+)$`)
+)
+
+// IsEmail reports whether v looks like an email address.
+func IsEmail(v string) bool { return emailRe.MatchString(strings.TrimSpace(v)) }
+
+// IsPhone reports whether v looks like a phone number: 7 to 15 digits with
+// only phone punctuation around them, and not a plain card-length number.
+func IsPhone(v string) bool {
+	v = strings.TrimSpace(v)
+	if !phoneRe.MatchString(v) || notPhoneRe.MatchString(v) {
+		return false
+	}
+	d := digits(v)
+	return len(d) >= 7 && len(d) <= 15
+}
+
+// IsIBAN reports whether v is a structurally valid IBAN (ISO 13616 mod 97).
+func IsIBAN(v string) bool {
+	s := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(v), " ", ""))
+	if !ibanRe.MatchString(s) {
+		return false
+	}
+	rearranged := s[4:] + s[:4]
+	var num strings.Builder
+	for _, r := range rearranged {
+		if r >= 'A' && r <= 'Z' {
+			fmt.Fprintf(&num, "%d", r-'A'+10)
+		} else {
+			num.WriteRune(r)
+		}
+	}
+	n, ok := new(big.Int).SetString(num.String(), 10)
+	return ok && new(big.Int).Mod(n, big.NewInt(97)).Int64() == 1
+}
+
+// IsCardNumber reports whether v is 13 to 19 digits (spaces and dashes
+// allowed) passing the Luhn check.
+func IsCardNumber(v string) bool {
+	s := strings.NewReplacer(" ", "", "-", "").Replace(strings.TrimSpace(v))
+	if !panRe.MatchString(s) {
+		return false
+	}
+	sum, double := 0, false
+	for i := len(s) - 1; i >= 0; i-- {
+		d := int(s[i] - '0')
+		if double {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+		double = !double
+	}
+	return sum%10 == 0
+}
+
+// IsIPAddress reports whether v parses as an IPv4 or IPv6 address, with or
+// without a prefix length (Postgres renders inet as text with one: 10.0.0.1/32).
+func IsIPAddress(v string) bool {
+	v = strings.TrimSpace(v)
+	if _, err := netip.ParseAddr(v); err == nil {
+		return true
+	}
+	_, err := netip.ParsePrefix(v)
+	return err == nil
+}
+
+func digits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// valueDetectors are tried in order; the first that matches enough of the
+// sample wins. Card numbers come before phones because a 16-digit number
+// that passes Luhn is far more likely a card.
+var valueDetectors = []struct {
+	label string
+	match func(string) bool
+	desc  string
+}{
+	{Email, IsEmail, "email addresses"},
+	{IBAN, IsIBAN, "valid IBANs (mod 97)"},
+	{CardNumber, IsCardNumber, "card numbers passing the Luhn check"},
+	{IPAddress, IsIPAddress, "IP addresses"},
+	{Phone, IsPhone, "phone numbers"},
+}
+
+// MinValueShare is the share of non-empty sampled values a detector must
+// match before it labels a column.
+const MinValueShare = 0.8
+
+// Input describes one column to classify.
+type Input struct {
+	Name     string
+	DataType string   // engine type name, for evidence and type hints
+	IsText   bool     // values are character data and were sampled
+	IsDate   bool     // date or timestamp type
+	IsDoc    bool     // JSON or XML document
+	Samples  []string // non-NULL sampled values; never stored
+}
+
+// Result is a label with its confidence and the evidence for it.
+type Result struct {
+	Label      string
+	Confidence float64
+	Evidence   []string
+}
+
+// Classify combines the name rule and the value detectors.
+//
+//   - A value detector matching at least MinValueShare of non-empty samples
+//     wins, with confidence 0.95 if the name agrees and 0.9 otherwise.
+//   - Otherwise a name rule gives its label with confidence 0.6, except that
+//     a date-of-birth name needs a date type, and value-checked labels (email,
+//     IBAN, card, IP, phone) drop to 0.4 when samples exist but do not match.
+//   - Otherwise a document column (JSON, XML) is labeled free_text with
+//     confidence 0.3: documents can hold personal data under any key.
+//   - Otherwise the column is labeled none.
+func Classify(in Input) Result {
+	byName := ByName(in.Name)
+	var nonEmpty []string
+	for _, s := range in.Samples {
+		if strings.TrimSpace(s) != "" {
+			nonEmpty = append(nonEmpty, s)
+		}
+	}
+	if in.IsText && len(nonEmpty) > 0 {
+		for _, d := range valueDetectors {
+			n := 0
+			for _, s := range nonEmpty {
+				if d.match(s) {
+					n++
+				}
+			}
+			if share := float64(n) / float64(len(nonEmpty)); share >= MinValueShare {
+				ev := []string{fmt.Sprintf("%d of %d sampled values are %s", n, len(nonEmpty), d.desc)}
+				conf := 0.9
+				if byName == d.label {
+					conf = 0.95
+					ev = append(ev, "column name agrees")
+				}
+				return Result{Label: d.label, Confidence: conf, Evidence: ev}
+			}
+		}
+	}
+	switch {
+	case byName == "" && in.IsDoc:
+		return Result{Label: FreeText, Confidence: 0.3, Evidence: []string{in.DataType + " documents can hold personal data under any key; review"}}
+	case byName == "":
+		return Result{Label: None, Confidence: 0.5, Evidence: []string{"no name rule or value detector matched"}}
+	case byName == BirthDate && !in.IsDate:
+		return Result{Label: None, Confidence: 0.3, Evidence: []string{"name suggests a date of birth but the type is " + in.DataType}}
+	}
+	ev := []string{fmt.Sprintf("column name %q matches the %s rule", in.Name, byName)}
+	conf := 0.6
+	if valueChecked(byName) && in.IsText && len(nonEmpty) > 0 {
+		conf = 0.4
+		ev = append(ev, "sampled values did not confirm it")
+	}
+	return Result{Label: byName, Confidence: conf, Evidence: ev}
+}
+
+func valueChecked(label string) bool {
+	switch label {
+	case Email, IBAN, CardNumber, IPAddress, Phone:
+		return true
+	}
+	return false
+}
