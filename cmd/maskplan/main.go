@@ -1,15 +1,20 @@
-// Command maskplan classifies personal data in a database and reports which
-// of it a role can read raw.
+// Command maskplan classifies personal data in a database, reports which of
+// it a role can read raw, and builds masked views for agent logins.
 //
-//	maskplan scan   --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml]
-//	maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--schema a,b] [--json]
+//	maskplan scan    --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml]
+//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--schema a,b] [--json]
+//	maskplan plan    [--policy maskplan.yaml] [--source NAME]
+//	maskplan apply   [--policy maskplan.yaml] [--source NAME] [--yes]
+//	maskplan destroy [--policy maskplan.yaml] [--source NAME] [--yes]
 //
-// The DSN can also come from MASKPLAN_DSN. Both commands only read: scan
+// The DSN can also come from MASKPLAN_DSN. scan and report only read: scan
 // samples rows in a read-only transaction and stores no values; report reads
-// the catalog and runs EXPLAIN.
+// the catalog and runs EXPLAIN. plan prints the SQL apply would run; apply
+// and destroy change nothing without --yes.
 //
 // Exit status: 0 success (report: nothing raw reachable), 1 report found raw
-// personal data, key material or paths it cannot trace, 2 error.
+// personal data, key material or paths it cannot trace (apply: a report
+// after apply did), 2 error.
 package main
 
 import (
@@ -29,13 +34,15 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
+	"github.com/chauhanprateek89/maskplan/internal/policy"
 	"github.com/chauhanprateek89/maskplan/internal/report"
 	"github.com/chauhanprateek89/maskplan/internal/scan"
 )
 
 const usage = `usage:
   maskplan scan   --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml]
-  maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--schema a,b] [--json]
+  maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--schema a,b] [--json]
+  maskplan plan|apply|destroy [--policy maskplan.yaml] [--source NAME] [--yes]
 
 DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8
 user:pass@tcp(host:3306)/db or mysql://user:pass@host:3306/db. On MySQL, --role
@@ -58,6 +65,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = runScan(args[1:], stdout, stderr)
 	case "report":
 		code, err = runReport(args[1:], stdout, stderr)
+	case "plan", "apply", "destroy":
+		code, err = runApply(args[0], args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -215,6 +224,8 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	schemas := fl.String("schema", "", "comma-separated schemas to report on (default: all non-system schemas)")
 	internal := fl.String("internal-schema", "maskplan_internal", "schema holding maskplan's key table")
 	asJSON := fl.Bool("json", false, "write JSON")
+	policyPath := fl.String("policy", "", "policy file: check that the role's views are the ones it compiles to (Postgres)")
+	source := fl.String("source", "", "with --policy, the policy source this database is (default: its only one of this engine)")
 	if err := fl.Parse(args); err != nil {
 		return 2, err
 	}
@@ -236,9 +247,17 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	opts := report.Options{Schemas: splitList(*schemas), InternalSchema: *internal}
+	opts := report.Options{Schemas: splitList(*schemas), InternalSchema: *internal, Source: *source}
+	if *policyPath != "" {
+		if opts.Policy, err = policy.Load(*policyPath); err != nil {
+			return 2, err
+		}
+	}
 	var r *report.Report
 	if isMySQL {
+		if opts.Policy != nil {
+			return 2, errors.New("--policy is not supported on MySQL yet")
+		}
 		db, err := sql.Open("mysql", target)
 		if err != nil {
 			return 2, err

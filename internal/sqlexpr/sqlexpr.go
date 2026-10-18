@@ -215,3 +215,54 @@ func FakeIndex(e Engine, c Column, p Pads, size int) (string, error) {
 	}
 	return "", fmt.Errorf("unknown engine %q", e)
 }
+
+// GeneralizeYear returns the SQL for a date or timestamp truncated to the
+// first day of its year, as a date.
+func GeneralizeYear(e Engine, expr string) (string, error) {
+	switch e {
+	case Postgres:
+		return fmt.Sprintf("date_trunc('year', %s)::date", expr), nil
+	case MySQL:
+		return fmt.Sprintf("MAKEDATE(YEAR(%s), 1)", expr), nil
+	}
+	return "", fmt.Errorf("unknown engine %q", e)
+}
+
+// GeneralizeMonth returns the SQL for a date or timestamp truncated to the
+// first day of its month, as a date.
+func GeneralizeMonth(e Engine, expr string) (string, error) {
+	switch e {
+	case Postgres:
+		return fmt.Sprintf("date_trunc('month', %s)::date", expr), nil
+	case MySQL:
+		return fmt.Sprintf("DATE_SUB(DATE(%[1]s), INTERVAL DAYOFMONTH(%[1]s) - 1 DAY)", expr), nil
+	}
+	return "", fmt.Errorf("unknown engine %q", e)
+}
+
+// Prefix returns the SQL for the first n characters of a value's text.
+func Prefix(e Engine, expr string, n int) (string, error) {
+	if n < 1 {
+		return "", fmt.Errorf("prefix length must be positive, got %d", n)
+	}
+	switch e {
+	case Postgres:
+		return fmt.Sprintf("left((%s)::text, %d)", expr, n), nil
+	case MySQL:
+		return fmt.Sprintf("LEFT(CAST(%s AS CHAR), %d)", expr, n), nil
+	}
+	return "", fmt.Errorf("unknown engine %q", e)
+}
+
+// FakeEmail returns the SQL for a fake email address made from a name the
+// dictionary picked: "Aoife Murphy" becomes aoife.murphy@example.invalid.
+// The .invalid domain cannot be delivered to.
+func FakeEmail(e Engine, nameExpr string) (string, error) {
+	switch e {
+	case Postgres:
+		return fmt.Sprintf("lower(replace(%s, ' ', '.')) || '@example.invalid'", nameExpr), nil
+	case MySQL:
+		return fmt.Sprintf("CONCAT(LOWER(REPLACE(%s, ' ', '.')), '@example.invalid')", nameExpr), nil
+	}
+	return "", fmt.Errorf("unknown engine %q", e)
+}

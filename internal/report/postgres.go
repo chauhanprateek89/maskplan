@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
+	"github.com/chauhanprateek89/maskplan/internal/compile"
+	"github.com/chauhanprateek89/maskplan/internal/policy"
 	"github.com/chauhanprateek89/maskplan/internal/sqlexpr"
 	"github.com/chauhanprateek89/maskplan/internal/token"
 )
@@ -22,6 +24,10 @@ type Options struct {
 	Schemas []string
 	// InternalSchema holds maskplan's key table; default maskplan_internal.
 	InternalSchema string
+	// Policy, if set, is checked: the role's views must be the ones it
+	// compiles to for Source (default: its only source of this engine).
+	Policy *policy.Policy
+	Source string
 }
 
 func (o Options) internal() string {
@@ -56,7 +62,11 @@ type pgState struct {
 	report   *Report
 	roots    map[[2]string][2]string // schema, partition -> schema, root table
 	internal string
-	catalogs map[string]bool // system catalog relation -> PUBLIC can read it
+	catalogs map[string]bool   // system catalog relation -> PUBLIC can read it
+	wheres   map[string]string // view -> top-level WHERE clause
+	filtered map[string]bool   // views read through a Subquery Scan
+	read     map[string]bool   // views the role can read
+	matched  map[string]bool   // views that are the policy's
 }
 
 // Postgres builds the report for role. conn should belong to an inspecting
@@ -75,7 +85,12 @@ func Postgres(ctx context.Context, conn *pgx.Conn, role string, cls *classificat
 		return nil, err
 	}
 
-	s := &pgState{ctx: ctx, tx: tx, opts: opts, roles: map[uint32]*pgRole{}, internal: opts.internal(), catalogs: map[string]bool{}}
+	if opts.Policy != nil {
+		if opts.Source, err = PolicySource(opts.Policy, "postgres", opts.Source); err != nil {
+			return nil, err
+		}
+	}
+	s := &pgState{ctx: ctx, tx: tx, opts: opts, roles: map[uint32]*pgRole{}, internal: opts.internal(), catalogs: map[string]bool{}, wheres: map[string]string{}, filtered: map[string]bool{}, read: map[string]bool{}, matched: map[string]bool{}}
 	if cls != nil {
 		s.cls = cls.Index()
 	}
@@ -92,6 +107,8 @@ func Postgres(ctx context.Context, conn *pgx.Conn, role string, cls *classificat
 		s.roleFindings,
 		s.columnFindings,
 		s.viewFindings,
+		s.policyFindings,
+		s.conditionFindings,
 		s.functionFindings,
 		s.foreignServerFindings,
 		s.defaultPrivilegeFindings,
@@ -403,6 +420,25 @@ type planNode struct {
 	Alias        string     `json:"Alias"`
 	Output       []string   `json:"Output"`
 	Plans        []planNode `json:"Plans"`
+	// Conditions, which run on base rows whatever the query selects.
+	Filter        string `json:"Filter"`
+	JoinFilter    string `json:"Join Filter"`
+	HashCond      string `json:"Hash Cond"`
+	MergeCond     string `json:"Merge Cond"`
+	IndexCond     string `json:"Index Cond"`
+	RecheckCond   string `json:"Recheck Cond"`
+	OneTimeFilter string `json:"One-Time Filter"`
+	TIDCond       string `json:"TID Cond"`
+}
+
+func (n *planNode) conditions() []string {
+	var out []string
+	for _, c := range []string{n.Filter, n.JoinFilter, n.HashCond, n.MergeCond, n.IndexCond, n.RecheckCond, n.OneTimeFilter, n.TIDCond} {
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // explainJSON returns the plan of query as canonical JSON (for comparing
@@ -442,7 +478,7 @@ func (s *pgState) explainJSON(query string) (string, *planNode, error) {
 	if !ok {
 		return "", nil, fmt.Errorf("unexpected EXPLAIN output")
 	}
-	canon, err := json.Marshal(top["Plan"]) // map keys sorted
+	canon, err := json.Marshal(canonicalPlan(top["Plan"])) // map keys sorted
 	if err != nil {
 		return "", nil, err
 	}
@@ -451,10 +487,15 @@ func (s *pgState) explainJSON(query string) (string, *planNode, error) {
 
 // viewPlan is the plan of SELECT col FROM view.
 type viewPlan struct {
-	canon    string
-	output   string   // top-level output expression
-	refs     []colRef // column references in output
-	readsKey bool     // the plan reads the maskplan key table
+	schema, view string
+	canon        string
+	output       string   // top-level output expression
+	refs         []colRef // column references in output
+	readsKey     bool     // the plan reads the maskplan key table
+	rels         map[string][]rel
+	// barrier is set when the view is not flattened (security_barrier):
+	// the plan reads the column from a Subquery Scan.
+	barrier *subqueryScan
 	// untraceable says why the output cannot be traced to base columns, if
 	// it cannot.
 	untraceable string
@@ -471,9 +512,9 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &viewPlan{canon: canon}
-	type rel struct{ schema, name string }
+	p := &viewPlan{schema: schema, view: view, canon: canon}
 	aliases := map[string][]rel{}
+	p.rels = aliases
 	var walk func(n *planNode)
 	walk = func(n *planNode) {
 		if n.Alias != "" {
@@ -487,6 +528,10 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 		}
 	}
 	walk(root)
+	if sq := barrierScan(root); sq != nil {
+		p.barrier = sq
+		root = &planNode{NodeType: root.NodeType, Output: []string{sq.expr}}
+	}
 	if len(root.Output) != 1 {
 		p.untraceable = fmt.Sprintf("the top plan node (%s) has %d output expressions", root.NodeType, len(root.Output))
 		return p, nil
@@ -524,6 +569,69 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 	return p, nil
 }
 
+type rel struct{ schema, name string }
+
+// subqueryScan is a view column read through a Subquery Scan: a view that
+// is not flattened, as security_barrier views are not.
+type subqueryScan struct {
+	alias, col string
+	outputs    []string // the subquery's output list
+	pos        int      // which of them the column is
+	expr       string   // what the column is, or NULL if every output is NULL
+	nested     bool     // through more than one Subquery Scan
+}
+
+var nullConstRe = regexp.MustCompile(`^NULL::(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_ ]*)(?:\.(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_]*))?(?:\(\d+(?:,\d+)?\))?(?:\[\])*$`)
+
+// barrierScan recognizes SELECT col FROM view planned as a Subquery Scan
+// whose only output is a plain reference to one subquery column, and
+// follows it down through nested Subquery Scans. The planner replaces every
+// subquery output the query does not use with a NULL constant, so the
+// column is the one output that is not NULL. Which output that is comes
+// from the plan, not from the view's column list: a view can name its
+// subquery's columns in any order. Two non-NULL outputs (volatile
+// expressions are never replaced) end the trace there, and the column
+// cannot be traced. Only a single level is recognized as a masked view's
+// shape; deeper ones are traced for raw columns only.
+func barrierScan(root *planNode) *subqueryScan {
+	if len(root.Output) != 1 {
+		return nil
+	}
+	var first *subqueryScan
+	n, expr := root, root.Output[0]
+	for depth := 0; n.NodeType == "Subquery Scan" && len(n.Plans) == 1; depth++ {
+		m := refRe.FindStringSubmatch(expr)
+		if m == nil || m[0] != expr || unquote(m[1]) != n.Alias {
+			break
+		}
+		sq := &subqueryScan{alias: n.Alias, col: unquote(m[2]), outputs: n.Plans[0].Output, pos: -1}
+		for i, o := range sq.outputs {
+			if !nullConstRe.MatchString(o) {
+				if sq.pos >= 0 {
+					return nil
+				}
+				sq.pos = i
+			}
+		}
+		switch {
+		case sq.pos >= 0:
+			sq.expr = sq.outputs[sq.pos]
+		case len(sq.outputs) > 0:
+			sq.pos, sq.expr = 0, sq.outputs[0]
+		default:
+			return nil
+		}
+		if first == nil {
+			first = sq
+		} else {
+			first.nested = true
+		}
+		first.expr = sq.expr
+		n, expr = &n.Plans[0], sq.expr
+	}
+	return first
+}
+
 // publicCatalog reports whether PUBLIC can read a system catalog relation.
 func (s *pgState) publicCatalog(schema, rel string) (bool, error) {
 	k := schema + "." + rel
@@ -546,49 +654,195 @@ var (
 	tokenLenRe = regexp.MustCompile(`(?:FROM 1 FOR |, 1, )(\d+)\), 'hex'::text\)`)
 )
 
-// isMaskplanToken reports whether the view column is exactly a maskplan
-// token of its one base column. Looking for the token's shape is not enough:
-// coalesce(email, <token>) has the shape and returns raw emails. So the
-// report builds the token expression maskplan would generate for that base
+// recognized is a view column that is exactly a maskplan transform of one
+// base column.
+type recognized struct {
+	transform string
+	base      colRef
+}
+
+var prefixLenRe = regexp.MustCompile(`^"left"\(.*, (\d+)\)$`)
+
+// recognize reports whether the view column is exactly a maskplan transform
+// of one base column. Looking for a transform's shape is not enough:
+// coalesce(email, <token>) has the shape of a token and returns raw emails.
+// So the report builds the expression maskplan would generate for that base
 // column, has the server plan it, and requires the two plans to be
-// identical, key-table InitPlans included. Anything else,
-// including correct masking written another way, is not recognized and is
-// reported UNKNOWN.
-func (s *pgState) isMaskplanToken(v *viewPlan) (bool, error) {
-	if !v.readsKey || !singleColumn(v.refs) {
-		return false, nil
-	}
-	ref := v.refs[0]
-	lm := tokenLabelRe.FindStringSubmatch(v.output)
-	nm := tokenLenRe.FindStringSubmatch(v.output)
-	if lm == nil || nm == nil {
-		return false, nil
-	}
-	var n int
-	if _, err := fmt.Sscanf(nm[1], "%d", &n); err != nil {
-		return false, nil
+// identical (see canonicalPlan), key-table InitPlans included. Anything
+// else, including correct masking written another way, is not recognized
+// and is reported UNKNOWN.
+func (s *pgState) recognize(v *viewPlan) (*recognized, error) {
+	if !singleColumn(v.refs) {
+		return nil, nil
 	}
 	_, pads, err := sqlexpr.KeySource(sqlexpr.Postgres, pgx.Identifier{s.internal, "key_material"}.Sanitize(), "k")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	for _, norm := range []token.Normalizer{token.Email, token.Phone, token.Trim} {
-		expr, err := sqlexpr.Token(sqlexpr.Postgres, sqlexpr.Column{
-			Expr:        pgx.Identifier{ref.alias, ref.col}.Sanitize(),
-			Label:       lm[1],
-			Normalizer:  norm,
-			TokenHexLen: 2 * n,
-		}, pads)
-		if err != nil {
-			return false, nil // not a label or length maskplan generates
+	type candidate struct{ transform, expr, join string }
+	var cands []candidate
+	base := v.refs[0]
+	switch {
+	case base.schema == s.internal && base.rel == "names" && base.col == "name":
+		// fake_name and fake_email read the name dictionary, joined on the
+		// base column's keyed index: the base column is in the join
+		// condition, named by the join's alias.
+		col, ok := strings.CutPrefix(base.alias, "fake_")
+		if !ok {
+			return nil, nil
 		}
-		want, _, err := s.explainJSON(fmt.Sprintf("SELECT %s FROM %s %s", expr,
-			pgx.Identifier{ref.schema, ref.rel}.Sanitize(), pgx.Identifier{ref.alias}.Sanitize()))
-		if err == nil && want == v.canon {
-			return true, nil
+		var found []colRef
+		for alias, rels := range v.rels {
+			if len(rels) == 1 && rels[0].name != "" && rels[0].schema != s.internal {
+				found = append(found, colRef{alias: alias, schema: rels[0].schema, rel: rels[0].name, col: col, resolved: true})
+			}
+		}
+		if len(found) != 1 {
+			return nil, nil
+		}
+		base = found[0]
+		base.label, base.labeled = s.label(base.schema, base.rel, base.col)
+		base.isPII = base.labeled && base.label.IsPII()
+		for _, t := range []string{policy.FakeName, policy.FakeEmail} {
+			expr, join, err := compile.ColumnSQL(policy.Decision{Transform: t, Label: base.label.Label}, compile.Column{Name: col}, base.alias, pads, s.internal)
+			if err != nil {
+				return nil, nil
+			}
+			cands = append(cands, candidate{t, expr, join})
+		}
+	case v.readsKey && tokenLabelRe.MatchString(v.output) && tokenLenRe.MatchString(v.output):
+		lm := tokenLabelRe.FindStringSubmatch(v.output)
+		nm := tokenLenRe.FindStringSubmatch(v.output)
+		var n int
+		if _, err := fmt.Sscanf(nm[1], "%d", &n); err != nil {
+			return nil, nil
+		}
+		for _, norm := range []token.Normalizer{token.Email, token.Phone, token.Trim} {
+			expr, err := sqlexpr.Token(sqlexpr.Postgres, sqlexpr.Column{
+				Expr:        pgx.Identifier{base.alias, base.col}.Sanitize(),
+				Label:       lm[1],
+				Normalizer:  norm,
+				TokenHexLen: 2 * n,
+			}, pads)
+			if err != nil {
+				return nil, nil // not a label or length maskplan generates
+			}
+			cands = append(cands, candidate{policy.Token, expr, ""})
+		}
+	default:
+		c := compile.Column{Name: base.col, Category: "D"}
+		ds := []policy.Decision{{Transform: policy.GeneralizeYear}, {Transform: policy.GeneralizeMonth}}
+		if m := prefixLenRe.FindStringSubmatch(v.output); m != nil {
+			var n int
+			if _, err := fmt.Sscanf(m[1], "%d", &n); err == nil {
+				ds = append(ds, policy.Decision{Transform: policy.Prefix, Params: map[string]any{"keep": n}})
+			}
+		}
+		for _, d := range ds {
+			if expr, join, err := compile.ColumnSQL(d, c, base.alias, pads, s.internal); err == nil {
+				cands = append(cands, candidate{d.Transform, expr, join})
+			}
 		}
 	}
-	return false, nil
+	from := pgx.Identifier{base.schema, base.rel}.Sanitize() + " " + pgx.Identifier{base.alias}.Sanitize()
+	for _, c := range cands {
+		q, err := s.reference(v, c.expr, from+c.join)
+		if errors.Is(err, errNotReferenceable) {
+			return nil, nil
+		} else if err != nil {
+			return nil, err
+		}
+		if want, _, err := s.explainJSON(q); err == nil && want == v.canon {
+			return &recognized{transform: c.transform, base: base}, nil
+		}
+	}
+	return nil, nil
+}
+
+var errNotReferenceable = errors.New("no reference query for this shape")
+
+// reference is the query whose plan the view column's plan must equal. It
+// has the shape of a view so that the planner treats it like one: a
+// subquery that is flattened, or for a view read through a Subquery Scan,
+// the same subquery kept by OFFSET 0, with the view's own WHERE clause and
+// the other outputs as the NULLs the planner made of them. (A query over
+// one table also deparses its columns unqualified.) The view's WHERE
+// clause is copied whatever it is: it decides which rows, not what a
+// column's values are, and --policy checks it.
+func (s *pgState) reference(v *viewPlan, expr, from string) (string, error) {
+	sq := v.barrier
+	if sq != nil && sq.nested {
+		return "", errNotReferenceable
+	}
+	where, err := s.viewWhere(v.schema, v.view)
+	if err != nil {
+		return "", err
+	}
+	if where != "" {
+		where = " WHERE " + where
+	}
+	if sq == nil {
+		return fmt.Sprintf("SELECT v.c FROM (SELECT %s AS c FROM %s%s) v", expr, from, where), nil
+	}
+	cols := make([]string, len(sq.outputs))
+	for i, o := range sq.outputs {
+		if i == sq.pos {
+			cols[i] = expr + " AS " + pgx.Identifier{sq.col}.Sanitize()
+		} else {
+			cols[i] = o + " AS " + pgx.Identifier{fmt.Sprintf("%s_%d", sq.col, i)}.Sanitize()
+		}
+	}
+	return fmt.Sprintf("SELECT %s FROM (SELECT %s FROM %s%s OFFSET 0) %s",
+		pgx.Identifier{sq.alias, sq.col}.Sanitize(), strings.Join(cols, ", "), from, where, pgx.Identifier{sq.alias}.Sanitize()), nil
+}
+
+// viewWhere returns the top-level WHERE clause of a view's definition, or
+// "" if it has none. A clause it gets wrong only makes plans differ.
+func (s *pgState) viewWhere(schema, view string) (string, error) {
+	k := schema + "." + view
+	if w, ok := s.wheres[k]; ok {
+		return w, nil
+	}
+	var def string
+	if err := s.tx.QueryRow(s.ctx, "SELECT pg_get_viewdef(to_regclass($1), false)", pgx.Identifier{schema, view}.Sanitize()).Scan(&def); err != nil {
+		return "", err
+	}
+	w := topLevelWhere(def)
+	s.wheres[k] = w
+	return w, nil
+}
+
+func topLevelWhere(def string) string {
+	depth, at := 0, -1
+	isWord := func(b byte) bool {
+		return b == '_' || b == '$' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+	}
+	for i := 0; i < len(def); i++ {
+		switch c := def[i]; c {
+		case '\'', '"':
+			for i++; i < len(def) && (def[i] != c || i+1 < len(def) && def[i+1] == c); i++ {
+				if def[i] == c {
+					i++ // a doubled quote
+				}
+			}
+			if i >= len(def) {
+				return ""
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case 'W':
+			if depth == 0 && strings.HasPrefix(def[i:], "WHERE") && (i == 0 || !isWord(def[i-1])) &&
+				(i+5 == len(def) || !isWord(def[i+5])) {
+				at = i + 5
+			}
+		}
+	}
+	if at < 0 {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(def[at:]), ";"))
 }
 
 // singleColumn reports whether refs are all the same resolved column. A
@@ -655,12 +909,16 @@ func (s *pgState) viewFindings() error {
 		return err
 	}
 	for _, v := range views {
+		s.read[v.schema+"."+v.rel] = true
 		obj := v.schema + "." + v.rel + "." + v.col
 		access := "view: " + s.explain(v)
 		p, err := s.lineage(v.schema, v.rel, v.col)
 		if err != nil {
 			s.add(Finding{Status: Unknown, Object: obj, Path: fmt.Sprintf("cannot trace view column (EXPLAIN failed: %v); %s", err, access)})
 			continue
+		}
+		if p.barrier != nil {
+			s.filtered[v.schema+"."+v.rel] = true
 		}
 		expr, refs := p.output, p.refs
 		var pii, unlabeled []colRef
@@ -677,9 +935,9 @@ func (s *pgState) viewFindings() error {
 		}
 		short := printableExpr(expr)
 		passthrough := len(pii) == 1 && len(refs) == 1 && trimParens(expr) == pii[0].raw
-		masked := false
-		if !passthrough && singleColumn(refs) {
-			if masked, err = s.isMaskplanToken(p); err != nil {
+		var rec *recognized
+		if !passthrough {
+			if rec, err = s.recognize(p); err != nil {
 				return err
 			}
 		}
@@ -689,11 +947,11 @@ func (s *pgState) viewFindings() error {
 		case passthrough:
 			base := pii[0].schema + "." + pii[0].rel + "." + pii[0].col
 			s.add(Finding{Status: Raw, Object: obj, Label: pii[0].label.Label, Path: "passes through " + base + "; " + access})
-		case masked:
-			r := refs[0]
-			s.add(Finding{Status: Masked, Object: obj, Label: r.label.Label, Path: "maskplan token of " + r.schema + "." + r.rel + "." + r.col})
+		case rec != nil:
+			r := rec.base
+			s.add(Finding{Status: Masked, Object: obj, Label: r.label.Label, Path: "maskplan " + rec.transform + " of " + r.schema + "." + r.rel + "." + r.col})
 		case len(pii) > 0:
-			s.add(Finding{Status: Unknown, Object: obj, Label: pii[0].label.Label, Path: "expression over " + pii[0].schema + "." + pii[0].rel + "." + pii[0].col + " is not a maskplan token: " + short + "; " + access})
+			s.add(Finding{Status: Unknown, Object: obj, Label: pii[0].label.Label, Path: "expression over " + pii[0].schema + "." + pii[0].rel + "." + pii[0].col + " is not a maskplan transform: " + short + "; " + access})
 		case p.untraceable != "":
 			s.add(Finding{Status: Unknown, Object: obj, Path: "cannot trace view column to base columns (" + p.untraceable + "): " + short + "; " + access})
 		case unresolved:
@@ -703,6 +961,64 @@ func (s *pgState) viewFindings() error {
 		}
 	}
 	return nil
+}
+
+// conditionFindings checks what a view's own conditions read. They run on
+// base rows whatever the role selects, with the base columns' raw values,
+// and can pass them to the role: a function that raises a notice, a cast
+// that fails with the value in its error (WHERE email::int > 0). A
+// condition that reads a personal-data column is UNKNOWN, unless --policy
+// says the view is the policy's. Only conditions the plan shows on columns
+// it can trace are checked.
+func (s *pgState) conditionFindings() error {
+	for _, k := range sortedKeys(s.read) {
+		if s.matched[k] {
+			continue
+		}
+		schema, view, _ := strings.Cut(k, ".")
+		_, root, err := s.explainJSON("SELECT 1 FROM " + pgx.Identifier{schema, view}.Sanitize())
+		if err != nil {
+			s.add(Finding{Status: Unknown, Object: "view " + k, Path: fmt.Sprintf("cannot check the view's conditions (EXPLAIN failed: %v)", err)})
+			continue
+		}
+		aliases := map[string][]rel{}
+		var conds []string
+		var walk func(n *planNode)
+		walk = func(n *planNode) {
+			if n.Alias != "" {
+				aliases[n.Alias] = append(aliases[n.Alias], rel{n.Schema, n.RelationName})
+			}
+			conds = append(conds, n.conditions()...)
+			for i := range n.Plans {
+				walk(&n.Plans[i])
+			}
+		}
+		walk(root)
+	conditions:
+		for _, c := range conds {
+			for _, m := range refRe.FindAllStringSubmatch(literalRe.ReplaceAllString(c, "''"), -1) {
+				base := aliases[unquote(m[1])]
+				if len(base) != 1 || base[0].name == "" {
+					continue
+				}
+				col := unquote(m[2])
+				if l, ok := s.label(base[0].schema, base[0].name, col); ok && l.IsPII() {
+					s.add(Finding{Status: Unknown, Object: "view " + k, Label: l.Label,
+						Path: fmt.Sprintf("its condition %s reads %s.%s.%s raw for every row, whatever the role selects; errors and functions in it can pass the value on%s",
+							printableExpr(c), base[0].schema, base[0].name, col, s.policyHint())})
+					break conditions
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *pgState) policyHint() string {
+	if s.opts.Policy == nil {
+		return " (if it is a maskplan rows filter, pass --policy)"
+	}
+	return ""
 }
 
 // derivedPath explains a materialized token column. Its values are tokens

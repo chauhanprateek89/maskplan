@@ -12,6 +12,7 @@ import (
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
 	"github.com/chauhanprateek89/maskplan/internal/classify"
+	"github.com/chauhanprateek89/maskplan/internal/compile"
 	"github.com/chauhanprateek89/maskplan/internal/sqlexpr"
 	"github.com/chauhanprateek89/maskplan/internal/token"
 )
@@ -34,7 +35,7 @@ var testSchemas = []string{"mpt_data", "mpt_pub", "mpt_views", "mpt_masked", "mp
 // cannot be traced. Every column must come out UNKNOWN, never MASKED. The
 // first five defeated the first version of the report (NOTES.md).
 var sneakyViews = []string{"coalesce_token", "token_concat", "newline_literal", "whole_row", "init_plan",
-	"union_all", "cte", "copied_key_table", "aggregate", "authid"}
+	"union_all", "cte", "copied_key_table", "aggregate", "authid", "fake_fallback", "long_prefix"}
 
 var testKey = []byte("report-test-key-0123456789abcdef")
 
@@ -170,8 +171,16 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		}
 		return s
 	}
+	fakeIndex := func(expr string) string {
+		s, err := sqlexpr.FakeIndex(sqlexpr.Postgres, sqlexpr.Column{Expr: expr, Label: classify.Email, Normalizer: token.Email}, pads, compile.DictionarySize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
 	exec(t, conn,
 		"CREATE TABLE mpt_internal.key_material (id smallint PRIMARY KEY CHECK (id = 1), ipad bytea NOT NULL, opad bytea NOT NULL)",
+		"CREATE TABLE mpt_internal.names (i int PRIMARY KEY, name text NOT NULL)",
 		"CREATE TABLE mpt_data.customers (id int PRIMARY KEY, email text, name text, phone text)",
 		"INSERT INTO mpt_data.customers VALUES (1, 'alice@example.com', 'Alice', '+353 1 234 5678')",
 		"CREATE TABLE mpt_data.accounts (id int PRIMARY KEY, customer_id int, iban text)",
@@ -200,8 +209,10 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		// Looks like a token (two sha256 calls, tok_ prefix) but has no key:
 		// anyone can hash guessed emails.
 		"CREATE VIEW mpt_views.fakemask AS SELECT id, 'tok_' || left(encode(sha256(sha256(convert_to(email, 'UTF8'))), 'hex'), 16) AS email FROM mpt_data.customers",
-		fmt.Sprintf("CREATE VIEW mpt_masked.customers AS SELECT c.id, %s AS email, %s AS phone FROM mpt_data.customers c %s",
-			tok("c.email", classify.Email, token.Email), tok("c.phone", classify.Phone, token.Phone), from),
+		// The fake name's join comes before the tokens, so reading one
+		// column leaves unused InitPlans in the plan (canonicalPlan).
+		fmt.Sprintf("CREATE VIEW mpt_masked.customers AS SELECT c.id, fake_email.name AS fake_email, %s AS email, %s AS phone, left(c.phone, 3) AS phone_prefix FROM mpt_data.customers c LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s %s",
+			tok("c.email", classify.Email, token.Email), tok("c.phone", classify.Phone, token.Phone), fakeIndex("c.email"), from),
 		"CREATE TABLE mpt_sneaky.key_material (id smallint PRIMARY KEY CHECK (id = 1), ipad bytea NOT NULL, opad bytea NOT NULL)",
 		"INSERT INTO mpt_sneaky.key_material SELECT * FROM mpt_internal.key_material",
 		fmt.Sprintf("CREATE VIEW mpt_sneaky.coalesce_token AS SELECT coalesce(c.email, %s) AS email FROM mpt_data.customers c %s", tok("c.email", classify.Email, token.Email), from),
@@ -215,6 +226,22 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		fmt.Sprintf("CREATE VIEW mpt_sneaky.copied_key_table AS SELECT %s AS email FROM mpt_data.customers c",
 			tokWith("c.email", sqlexpr.Pads{IPad: "(SELECT ipad FROM mpt_sneaky.key_material)", OPad: "(SELECT opad FROM mpt_sneaky.key_material)"})),
 		"CREATE VIEW mpt_sneaky.aggregate AS SELECT string_agg(email, ',') AS email FROM mpt_data.customers",
+		// A fake name that falls back to the raw value when the join misses.
+		fmt.Sprintf("CREATE VIEW mpt_sneaky.fake_fallback AS SELECT coalesce(fake_email.name, c.email) AS email FROM mpt_data.customers c LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s", fakeIndex("c.email")),
+		// A fake name indexed by another column than its alias claims: not
+		// raw, but not what maskplan generates either.
+		fmt.Sprintf("CREATE VIEW mpt_sneaky.fake_other_column AS SELECT fake_email.name AS email FROM mpt_data.customers c LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s", fakeIndex("c.name")),
+		// Selecting id still runs the condition on every email; the cast's
+		// error message carries the value.
+		"CREATE VIEW mpt_sneaky.cast_error AS SELECT c.id FROM mpt_data.customers c WHERE c.email::int > 0",
+		// A condition on a column that is not personal data: no finding.
+		"CREATE VIEW mpt_masked.big_orders AS SELECT id FROM mpt_data.orders WHERE total > 100",
+		"GRANT SELECT ON mpt_masked.big_orders TO mpt_clean",
+		// Prefix keeps at most 8 characters; 9 of an email is most of it.
+		"CREATE VIEW mpt_sneaky.long_prefix AS SELECT left(c.email, 9) AS email FROM mpt_data.customers c",
+		// The view lists its subquery's columns in another order. The plan,
+		// not the view's column list, says which output is the email.
+		"CREATE VIEW mpt_sneaky.swapped WITH (security_barrier) AS SELECT v.id, v.email FROM (SELECT c.email, c.id FROM mpt_data.customers c OFFSET 0) v",
 		// pg_authid holds password hashes; PUBLIC cannot read it, the owner can.
 		"CREATE VIEW mpt_sneaky.authid AS SELECT rolpassword AS email FROM pg_authid",
 		// What PUBLIC can read in the catalog anyway: no finding.
@@ -382,15 +409,20 @@ func TestReportPostgres(t *testing.T) {
 		{role: "mpt_rawview", want: []expect{{Raw, "mpt_views.contacts.email", []string{"passes through " + email}}}, mustNot: []string{email}},
 		{role: "mpt_nested", want: []expect{{Raw, "mpt_views.contacts_nested.email", []string{"passes through " + email}}}},
 		{role: "mpt_joinview", want: []expect{{Raw, "mpt_views.order_names.customer", []string{"passes through " + name}}}},
-		{role: "mpt_expr", want: []expect{{Unknown, "mpt_views.shouting.email", []string{"not a maskplan token"}}}},
+		{role: "mpt_expr", want: []expect{{Unknown, "mpt_views.shouting.email", []string{"not a maskplan transform"}}}},
 		{role: "mpt_subquery", want: []expect{{Unknown, "mpt_views.order_emails.email", []string{"cannot trace"}}}},
-		{role: "mpt_barrier", want: []expect{{Unknown, "mpt_views.barrier.email", nil}}},
-		{role: "mpt_fakemask", want: []expect{{Unknown, "mpt_views.fakemask.email", []string{"not a maskplan token"}}}},
+		{role: "mpt_barrier", want: []expect{{Raw, "mpt_views.barrier.email", []string{"passes through mpt_data.customers.email"}}}},
+		{role: "mpt_fakemask", want: []expect{{Unknown, "mpt_views.fakemask.email", []string{"not a maskplan transform"}}}},
 		{role: "mpt_clean", want: []expect{
 			{Masked, "mpt_masked.customers.email", []string{"maskplan token of " + email}},
 			{Masked, "mpt_masked.customers.phone", []string{"maskplan token of " + phone}},
-		}, mustNot: []string{email, phone, "mpt_masked.customers.id"}, pass: true},
-		{role: "mpt_sneaky", want: sneakyExpectations(), mustNot: []string{email}},
+			{Masked, "mpt_masked.customers.fake_email", []string{"maskplan fake_name of " + email}},
+			{Masked, "mpt_masked.customers.phone_prefix", []string{"maskplan prefix of " + phone}},
+		}, mustNot: []string{email, phone, "mpt_masked.customers.id", "view mpt_masked.big_orders"}, pass: true},
+		{role: "mpt_sneaky", want: append(sneakyExpectations(),
+			expect{Raw, "mpt_sneaky.swapped.email", []string{"passes through " + email}},
+			expect{Unlabeled, "mpt_sneaky.fake_other_column.email", nil},
+			expect{Unknown, "view mpt_sneaky.cast_error", []string{"reads " + email + " raw for every row"}}), mustNot: []string{email}},
 		// An extension's definer function warns but does not fail a clean role.
 		{role: "mpt_clean", needFDW: true, want: []expect{
 			{Warn, "function mpt_fn.ext_email(integer)", []string{"from extension postgres_fdw", "executable by mpt_clean"}},
@@ -497,7 +529,7 @@ func TestReportPostgres(t *testing.T) {
 			want []expect
 		}{
 			{"mpt_clean", []expect{{Key, "view mpt_sneaky.literal_key", []string{"definition contains the token key material"}}}},
-			{"mpt_sneaky", []expect{{Unknown, "mpt_sneaky.literal_key.email", []string{"not a maskplan token"}}}},
+			{"mpt_sneaky", []expect{{Unknown, "mpt_sneaky.literal_key.email", []string{"not a maskplan transform"}}}},
 		} {
 			r := runReport(t, conn, c.role)
 			for _, f := range r.Findings {
@@ -533,7 +565,7 @@ func TestReportPostgres(t *testing.T) {
 				masked++
 			}
 		}
-		if masked != 2 || r.Failed() {
+		if masked != 4 || r.Failed() {
 			t.Errorf("with compute_query_id on: %d masked, failed %v\n%s", masked, r.Failed(), dump(r))
 		}
 	})
