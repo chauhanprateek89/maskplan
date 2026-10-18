@@ -20,7 +20,7 @@ On a synthetic Irish bank held out from tuning, `scan` finds every email, IBAN, 
 - shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI;
 - a [benchmark](bench/README.md) of what masking costs on a 10-million-row table.
 
-Next: opt-in `report --as-role`, and a run on real managed services.
+Next: a run on real managed services.
 
 ```bash
 go install github.com/chauhanprateek89/maskplan/cmd/maskplan@latest

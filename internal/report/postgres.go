@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
 	"github.com/chauhanprateek89/maskplan/internal/compile"
@@ -28,6 +29,10 @@ type Options struct {
 	// compiles to for Source (default: its only source of this engine).
 	Policy *policy.Policy
 	Source string
+	// AsRole plans view columns as the reported role (SET ROLE), not as
+	// the inspecting user; the inspecting user must be able to SET ROLE to
+	// it. Postgres only.
+	AsRole bool
 }
 
 func (o Options) internal() string {
@@ -88,6 +93,15 @@ func Postgres(ctx context.Context, conn *pgx.Conn, role string, cls *classificat
 	if opts.Policy != nil {
 		if opts.Source, err = PolicySource(opts.Policy, "postgres", opts.Source); err != nil {
 			return nil, err
+		}
+	}
+	if opts.AsRole {
+		var can bool
+		if err := tx.QueryRow(ctx, "SELECT pg_has_role(current_user, $1, 'MEMBER')", role).Scan(&can); err != nil {
+			return nil, err
+		}
+		if !can {
+			return nil, fmt.Errorf("--as-role: %s cannot SET ROLE to %s; run as a superuser or a member of it", "the inspecting user", role)
 		}
 	}
 	s := &pgState{ctx: ctx, tx: tx, opts: opts, roles: map[uint32]*pgRole{}, internal: opts.internal(), catalogs: map[string]bool{}, wheres: map[string]string{}, filtered: map[string]bool{}, read: map[string]bool{}, matched: map[string]bool{}}
@@ -445,11 +459,24 @@ func (n *planNode) conditions() []string {
 // plans) and as a tree. It runs in a savepoint so that a failing EXPLAIN
 // does not abort the report.
 func (s *pgState) explainJSON(query string) (string, *planNode, error) {
+	return s.explainAs(query, false)
+}
+
+// explainAs is explainJSON, run as the reported role when asRole is set
+// and --as-role was given: then the plan has the role's own row-level
+// security and, for security_invoker views, its own rights on the base
+// tables. The savepoint's rollback resets the role.
+func (s *pgState) explainAs(query string, asRole bool) (string, *planNode, error) {
 	sp, err := s.tx.Begin(s.ctx)
 	if err != nil {
 		return "", nil, err
 	}
 	defer sp.Rollback(s.ctx)
+	if asRole && s.opts.AsRole {
+		if _, err := sp.Exec(s.ctx, "SET LOCAL ROLE "+pgx.Identifier{s.report.Role}.Sanitize()); err != nil {
+			return "", nil, err
+		}
+	}
 	var raw []byte
 	if err := sp.QueryRow(s.ctx, "EXPLAIN (VERBOSE, COSTS OFF, FORMAT JSON) "+query).Scan(&raw); err != nil {
 		return "", nil, err
@@ -507,8 +534,8 @@ type viewPlan struct {
 // alias. Parameters, subplans, whole-row references, CTE, subquery and
 // function scans, and nodes without an output list make it untraceable.
 func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
-	canon, root, err := s.explainJSON(fmt.Sprintf("SELECT %s FROM %s",
-		pgx.Identifier{col}.Sanitize(), pgx.Identifier{schema, view}.Sanitize()))
+	canon, root, err := s.explainAs(fmt.Sprintf("SELECT %s FROM %s",
+		pgx.Identifier{col}.Sanitize(), pgx.Identifier{schema, view}.Sanitize()), true)
 	if err != nil {
 		return nil, err
 	}
@@ -913,6 +940,13 @@ func (s *pgState) viewFindings() error {
 		obj := v.schema + "." + v.rel + "." + v.col
 		access := "view: " + s.explain(v)
 		p, err := s.lineage(v.schema, v.rel, v.col)
+		var pgErr *pgconn.PgError
+		if s.opts.AsRole && errors.As(err, &pgErr) && pgErr.Code == "42501" {
+			// The role holds SELECT on the view but cannot read through it:
+			// a security_invoker view over tables it has no rights on.
+			s.add(Finding{Status: Warn, Object: obj, Path: "SELECT on the view, but planning it as " + s.report.Role + " is denied (" + pgErr.Message + "); " + access})
+			continue
+		}
 		if err != nil {
 			s.add(Finding{Status: Unknown, Object: obj, Path: fmt.Sprintf("cannot trace view column (EXPLAIN failed: %v); %s", err, access)})
 			continue
@@ -976,7 +1010,11 @@ func (s *pgState) conditionFindings() error {
 			continue
 		}
 		schema, view, _ := strings.Cut(k, ".")
-		_, root, err := s.explainJSON("SELECT 1 FROM " + pgx.Identifier{schema, view}.Sanitize())
+		_, root, err := s.explainAs("SELECT 1 FROM "+pgx.Identifier{schema, view}.Sanitize(), true)
+		var pgErr *pgconn.PgError
+		if s.opts.AsRole && errors.As(err, &pgErr) && pgErr.Code == "42501" {
+			continue // the role cannot read through it; its columns say so
+		}
 		if err != nil {
 			s.add(Finding{Status: Unknown, Object: "view " + k, Path: fmt.Sprintf("cannot check the view's conditions (EXPLAIN failed: %v)", err)})
 			continue

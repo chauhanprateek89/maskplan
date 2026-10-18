@@ -552,6 +552,54 @@ func TestReportPostgres(t *testing.T) {
 
 	// pg_stat_statements turns on compute_query_id, which adds a query
 	// identifier to EXPLAIN VERBOSE; the plan comparison must ignore it.
+	t.Run("as-role", func(t *testing.T) {
+		var version int
+		if err := conn.QueryRow(context.Background(), "SELECT current_setting('server_version_num')::int").Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if version < 150000 {
+			t.Skip("security_invoker views are PostgreSQL 15 and later")
+		}
+		// SELECT on the view, nothing on the table: the role cannot read
+		// through it. Planned as the inspector, it looks raw.
+		exec(t, conn, "CREATE VIEW mpt_masked.invoker_contacts WITH (security_invoker = true) AS SELECT id, email FROM mpt_data.customers",
+			"GRANT SELECT ON mpt_masked.invoker_contacts TO mpt_clean")
+		defer exec(t, conn, "DROP VIEW mpt_masked.invoker_contacts")
+		as := func(asRole bool) *Report {
+			r, err := Postgres(context.Background(), conn, "mpt_clean", testClassification(), Options{Schemas: testSchemas, InternalSchema: testInternal, AsRole: asRole})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r
+		}
+		find := func(r *Report, obj string) *Finding {
+			for i := range r.Findings {
+				if r.Findings[i].Object == obj {
+					return &r.Findings[i]
+				}
+			}
+			return nil
+		}
+		if f := find(as(false), "mpt_masked.invoker_contacts.email"); f == nil || f.Status != Raw {
+			t.Errorf("as the inspector: %+v, want RAW (over-reported)", f)
+		}
+		r := as(true)
+		if f := find(r, "mpt_masked.invoker_contacts.email"); f == nil || f.Status != Warn || !strings.Contains(f.Path, "denied") {
+			t.Errorf("as the role: %+v, want WARN", f)
+		}
+		if f := find(r, "mpt_masked.customers.email"); f == nil || f.Status != Masked || r.Failed() {
+			t.Errorf("as the role, the masked view: %+v, failed %v\n%s", f, r.Failed(), dump(r))
+		}
+		// A definer view still passes raw data through, whoever plans it.
+		r, err := Postgres(context.Background(), conn, "mpt_rawview", testClassification(), Options{Schemas: testSchemas, InternalSchema: testInternal, AsRole: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f := find(r, "mpt_views.contacts.email"); f == nil || f.Status != Raw {
+			t.Errorf("as mpt_rawview: %+v, want RAW", f)
+		}
+	})
+
 	t.Run("compute_query_id on", func(t *testing.T) {
 		if version < 140000 {
 			t.Skip("compute_query_id is PostgreSQL 14 and later")

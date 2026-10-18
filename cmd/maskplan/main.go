@@ -2,7 +2,7 @@
 // it a role can read raw, and builds masked views for agent logins.
 //
 //	maskplan scan    --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml]
-//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--schema a,b] [--json]
+//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--as-role] [--schema a,b] [--json]
 //	maskplan plan    [--policy maskplan.yaml] [--source NAME]
 //	maskplan apply   [--policy maskplan.yaml] [--source NAME] [--yes]
 //	maskplan destroy [--policy maskplan.yaml] [--source NAME] [--yes]
@@ -41,7 +41,7 @@ import (
 
 const usage = `usage:
   maskplan scan   --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml]
-  maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--schema a,b] [--json]
+  maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--as-role] [--schema a,b] [--json]
   maskplan plan|apply|destroy [--policy maskplan.yaml] [--source NAME] [--yes]
 
 DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8
@@ -225,6 +225,7 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	internal := fl.String("internal-schema", "maskplan_internal", "schema holding maskplan's key table")
 	asJSON := fl.Bool("json", false, "write JSON")
 	policyPath := fl.String("policy", "", "policy file: check that the role's views are the ones it compiles to")
+	asRole := fl.Bool("as-role", false, "plan views as the role itself (SET ROLE), so security_invoker views and row-level security use its rights (Postgres; the inspecting user must be a member of the role)")
 	source := fl.String("source", "", "with --policy, the policy source this database is (default: its only one of this engine)")
 	if err := fl.Parse(args); err != nil {
 		return 2, err
@@ -247,7 +248,7 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	opts := report.Options{Schemas: splitList(*schemas), InternalSchema: *internal, Source: *source}
+	opts := report.Options{Schemas: splitList(*schemas), InternalSchema: *internal, Source: *source, AsRole: *asRole}
 	if *policyPath != "" {
 		if opts.Policy, err = policy.Load(*policyPath); err != nil {
 			return 2, err
@@ -255,6 +256,9 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 	var r *report.Report
 	if isMySQL {
+		if *asRole {
+			return 2, errors.New("--as-role is for PostgreSQL; MySQL accounts are not roles one can SET ROLE to")
+		}
 		db, err := sql.Open("mysql", target)
 		if err != nil {
 			return 2, err
