@@ -1,0 +1,464 @@
+{
+  "truth": "testdata/adventureworks/labels.yaml",
+  "source": "AdventureWorks-for-Postgres (install.sql from github.com/lorint/AdventureWorks-for-Postgres), AdventureWorks 2014 OLTP CSVs",
+  "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+  "date": "2026-10-18",
+  "runs": [
+    {
+      "sample": 100,
+      "seconds": 0.222721029,
+      "score": {
+        "columns": 468,
+        "pii": {
+          "TP": 25,
+          "FP": 9,
+          "FN": 1
+        },
+        "labels": {
+          "free_text": {
+            "TP": 5,
+            "FP": 7,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.marital_status": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.financial.bank_account": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.government_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 4,
+            "FP": 1,
+            "FN": 0
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          }
+        },
+        "errors": [
+          {
+            "column": "person.address.spatiallocation",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched"
+          },
+          {
+            "column": "person.contacttype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column \"name\" in table \"contacttype\", which holds people; sampled all 20 rows"
+          },
+          {
+            "column": "production.illustration.diagram",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
+          },
+          {
+            "column": "production.productdescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 100 rows with TABLESAMPLE BERNOULLI (13.1%) of about 762"
+          },
+          {
+            "column": "production.productmodel.catalogdescription",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
+          },
+          {
+            "column": "production.productmodel.instructions",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled 98 rows with TABLESAMPLE BERNOULLI (78.1%) of about 128"
+          },
+          {
+            "column": "production.vproductanddescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 96 rows with TABLESAMPLE BERNOULLI (5.67%) of about 1764"
+          },
+          {
+            "column": "purchasing.vendor.accountnumber",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 98 rows with TABLESAMPLE BERNOULLI (96.2%) of about 104"
+          },
+          {
+            "column": "sales.salesorderheader.accountnumber",
+            "want": "user.unique_id",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; 97 of 97 sampled values look like phone numbers, but the name says otherwise; sampled values did not confirm it; sampled 97 rows with TABLESAMPLE BERNOULLI (0.318%) of about 31465"
+          },
+          {
+            "column": "sales.specialoffer.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
+          },
+          {
+            "column": "sales.store.demographics",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled 106 rows with TABLESAMPLE BERNOULLI (14.3%) of about 701"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 1000,
+      "seconds": 0.354847136,
+      "score": {
+        "columns": 468,
+        "pii": {
+          "TP": 25,
+          "FP": 9,
+          "FN": 1
+        },
+        "labels": {
+          "free_text": {
+            "TP": 5,
+            "FP": 7,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.marital_status": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.financial.bank_account": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.government_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 4,
+            "FP": 1,
+            "FN": 0
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          }
+        },
+        "errors": [
+          {
+            "column": "person.address.spatiallocation",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched"
+          },
+          {
+            "column": "person.contacttype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column \"name\" in table \"contacttype\", which holds people; sampled all 20 rows"
+          },
+          {
+            "column": "production.illustration.diagram",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
+          },
+          {
+            "column": "production.productdescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 762 rows"
+          },
+          {
+            "column": "production.productmodel.catalogdescription",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.productmodel.instructions",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.vproductanddescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 990 rows with TABLESAMPLE BERNOULLI (56.7%) of about 1764"
+          },
+          {
+            "column": "purchasing.vendor.accountnumber",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled all 104 rows"
+          },
+          {
+            "column": "sales.salesorderheader.accountnumber",
+            "want": "user.unique_id",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; 975 of 975 sampled values look like phone numbers, but the name says otherwise; sampled values did not confirm it; sampled 975 rows with TABLESAMPLE BERNOULLI (3.18%) of about 31465"
+          },
+          {
+            "column": "sales.specialoffer.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
+          },
+          {
+            "column": "sales.store.demographics",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 701 rows"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 10000,
+      "seconds": 1.978039544,
+      "score": {
+        "columns": 468,
+        "pii": {
+          "TP": 25,
+          "FP": 9,
+          "FN": 1
+        },
+        "labels": {
+          "free_text": {
+            "TP": 5,
+            "FP": 7,
+            "FN": 0
+          },
+          "system.authentication": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.marital_status": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.financial.bank_account": {
+            "TP": 0,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.government_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 4,
+            "FP": 1,
+            "FN": 0
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          }
+        },
+        "errors": [
+          {
+            "column": "person.address.spatiallocation",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched"
+          },
+          {
+            "column": "person.contacttype.name",
+            "want": "none",
+            "got": "user.name",
+            "evidence": "column \"name\" in table \"contacttype\", which holds people; sampled all 20 rows"
+          },
+          {
+            "column": "production.illustration.diagram",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 5 rows"
+          },
+          {
+            "column": "production.productdescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 762 rows"
+          },
+          {
+            "column": "production.productmodel.catalogdescription",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.productmodel.instructions",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 128 rows"
+          },
+          {
+            "column": "production.vproductanddescription.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 1764 rows"
+          },
+          {
+            "column": "purchasing.vendor.accountnumber",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled all 104 rows"
+          },
+          {
+            "column": "sales.salesorderheader.accountnumber",
+            "want": "user.unique_id",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"accountnumber\" matches the user.financial.bank_account rule; 9990 of 9990 sampled values look like phone numbers, but the name says otherwise; sampled values did not confirm it; sampled 9990 rows with TABLESAMPLE BERNOULLI (31.8%) of about 31465"
+          },
+          {
+            "column": "sales.specialoffer.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 16 rows"
+          },
+          {
+            "column": "sales.store.demographics",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "xml documents can hold personal data under any key; review; sampled all 701 rows"
+          }
+        ]
+      }
+    }
+  ]
+}

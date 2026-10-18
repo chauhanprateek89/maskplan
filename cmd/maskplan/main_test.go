@@ -54,7 +54,7 @@ func TestScanReportPostgres(t *testing.T) {
 	for _, q := range []string{
 		"CREATE ROLE mpc_agent", "CREATE ROLE mpc_clean",
 		"CREATE SCHEMA mpc_cli",
-		"CREATE TABLE mpc_cli.customers (id int, email text, nickname text)",
+		"CREATE TABLE mpc_cli.customers (id int, email text, handle text)",
 		"INSERT INTO mpc_cli.customers SELECT g, 'u' || g || '@example.com', 'n' || g FROM generate_series(1, 20) g",
 		"CREATE TABLE mpc_cli.orders (id int, total numeric)",
 		"GRANT USAGE ON SCHEMA mpc_cli TO mpc_agent, mpc_clean",
@@ -80,13 +80,13 @@ func TestScanReportPostgres(t *testing.T) {
 		t.Errorf("scan summary: %s", out)
 	}
 
-	// A reviewer labels nickname by hand; a second scan keeps it.
+	// A reviewer labels handle by hand; a second scan keeps it.
 	f, err := classification.Load(cls)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, c := range f.Columns {
-		if c.Column == "nickname" {
+		if c.Column == "handle" {
 			f.Columns[i].Label, f.Columns[i].Reviewed = "user.name", true
 		}
 	}
@@ -97,12 +97,12 @@ func TestScanReportPostgres(t *testing.T) {
 	if f, err = classification.Load(cls); err != nil {
 		t.Fatal(err)
 	}
-	if c := f.Index()[classification.Key{Schema: "mpc_cli", Table: "customers", Column: "nickname"}]; c.Label != "user.name" || !c.Reviewed {
+	if c := f.Index()[classification.Key{Schema: "mpc_cli", Table: "customers", Column: "handle"}]; c.Label != "user.name" || !c.Reviewed {
 		t.Errorf("rescan overwrote a reviewed entry: %+v", c)
 	}
 
 	out = cmd(1, "report", "--role", "mpc_agent", "--classification", cls)
-	for _, want := range []string{"RAW       mpc_cli.customers.email", "mpc_cli.customers.nickname", "FAIL"} {
+	for _, want := range []string{"RAW       mpc_cli.customers.email", "mpc_cli.customers.handle", "FAIL"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report for mpc_agent lacks %q:\n%s", want, out)
 		}

@@ -11,6 +11,8 @@ Pre-alpha. What works today, on PostgreSQL 13 to 17:
 - `maskplan scan` labels personal data from column names, types and a sample of values, and writes `classification.yaml` for review;
 - `maskplan report --role` lists every labeled column a role can read raw, by which privilege path, and whether its reads are audited. Anything it cannot trace is reported as UNKNOWN, never as masked. See [docs/report.md](docs/report.md).
 
+On a synthetic Irish bank held out from tuning, `scan` finds every email, IBAN, card number and phone column (recall 1.00 at 100 to 10,000 sampled rows; this is a CI gate), with 0.87 precision and recall for personal data overall. On AdventureWorks, which it was tuned on, 0.74 precision and 0.96 recall. Method, misses and gaps: [docs/accuracy.md](docs/accuracy.md). Managed services (RDS, Cloud SQL, Azure) are simulated in CI, not yet tested for real.
+
 Both only read. Also here:
 
 - the [token specification](docs/token-spec.md), with a Go reference implementation and generated Postgres and MySQL SQL that produce identical tokens;
@@ -97,6 +99,11 @@ go test ./... -p 1 -v
 | `bench/` | Benchmark harness and Docker Compose setup |
 | `docs/token-spec.md` | Token specification, version 1 |
 | `docs/report.md` | What scan and report check, statuses and limitations |
+| `docs/accuracy.md` | Classifier precision and recall, and how they are measured |
+| `internal/fintech`, `testdata/fintech` | Synthetic Irish bank: generator, schema and ground truth |
+| `testdata/adventureworks` | Ground truth for AdventureWorks |
+| `testdata/managed` | Simulated managed-service Postgres for CI |
+| `bench/accuracy`, `bench/fintech` | Accuracy runner and synthetic-bank loader |
 | `SECURITY.md` | How to report a vulnerability, and the UNKNOWN-never-MASKED guarantee |
 
 ## License

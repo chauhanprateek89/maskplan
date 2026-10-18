@@ -28,6 +28,8 @@ const (
 	IPAddress  = "user.device.ip_address"
 	UniqueID   = "user.unique_id"
 	Secret     = "system.authentication"
+	Gender     = "user.demographic.gender"
+	Marital    = "user.demographic.marital_status"
 	FreeText   = classification.FreeText
 	None       = classification.None
 )
@@ -42,16 +44,22 @@ type nameRule struct {
 var nameRules = []nameRule{
 	{Email, regexp.MustCompile(`^(.*_)?(e_?mail|email_?address|mail)(_.*)?$`)},
 	{Phone, regexp.MustCompile(`^(.*_)?(phone|telephone|mobile|msisdn|cell|fax)(_?(number|no|num))?(_.*)?$`)},
-	{Name, regexp.MustCompile(`^(.*_)?(first_?name|last_?name|full_?name|surname|given_?name|family_?name|middle_?name|forename|display_?name|customer_?name|contact_?name|name)$`)},
+	{Name, regexp.MustCompile(`^(.*_)?(first_?name|last_?name|full_?name|surname|given_?name|family_?name|middle_?name|forename|display_?name|nick_?name|maiden_?name|` +
+		`(customer|contact|client|reviewer|card_?holder|account_?holder|holder|beneficiary|payee|payer|applicant|guarantor|recipient|sender|signatory|director|employee|person|patient|member)_?name)$`)},
 	{IPAddress, regexp.MustCompile(`^(.*_)?(ip|ip_?addr(ess)?|client_?ip|remote_?addr)$`)},
 	{PostalCode, regexp.MustCompile(`^(.*_)?(post_?code|postal_?code|zip|zip_?code|eircode)$`)},
 	{Address, regexp.MustCompile(`^(.*_)?(address|addr|street|address_?line_?\d*|city|town)$`)},
 	{BirthDate, regexp.MustCompile(`^(.*_)?(dob|date_?of_?birth|birth_?date|birthday|birth_?dt)$`)},
-	{NationalID, regexp.MustCompile(`^(.*_)?(ssn|nin|ni_?number|pps_?n?o?|ppsn|national_?id|tax_?id|passport_?(no|number)?|driving_?licen[cs]e(_?(no|number))?)$`)},
+	{NationalID, regexp.MustCompile(`^(.*_)?(ssn|nin|ni_?number|pps_?n?o?|ppsn|national_?id(_?(no|number|num))?|tax_?id(_?(no|number))?|passport_?(no|number)?|driving_?licen[cs]e(_?(no|number))?)$`)},
 	{IBAN, regexp.MustCompile(`^(.*_)?(iban|bank_?account(_?(no|number))?|account_?number|sort_?code|bic)$`)},
 	{CardNumber, regexp.MustCompile(`^(.*_)?(pan|card_?(no|number|num)|credit_?card(_?number)?|cc_?(no|number|num))$`)},
-	{Secret, regexp.MustCompile(`^(.*_)?(password|passwd|pwd|password_?hash|secret|api_?key|token|access_?token|refresh_?token|private_?key|otp_?secret)$`)},
-	{UniqueID, regexp.MustCompile(`^(.*_)?(customer_?(no|number|id|ref)|account_?(id|no|ref)|member_?(no|number|id)|client_?(id|no|ref)|user_?id)$`)},
+	{Secret, regexp.MustCompile(`^(.*_)?(password|passwd|pwd|password_?(hash|salt)|salt|secret|api_?key|token|access_?token|refresh_?token|private_?key|otp_?secret)$`)},
+	{Gender, regexp.MustCompile(`^(.*_)?(gender|sex)$`)},
+	{Marital, regexp.MustCompile(`^(.*_)?(marital|civil)_?status$`)},
+	// Business identifiers people are known by. Surrogate keys (customer_id)
+	// are not labeled: they identify a row, and the columns that identify
+	// the person are labeled where they live.
+	{UniqueID, regexp.MustCompile(`^(.*_)?(customer_?(no|number|ref)|account_?(no|ref)|member_?(no|number)|client_?(no|ref)|login(_?(id|name))?|user_?name)$`)},
 	{FreeText, regexp.MustCompile(`^(.*_)?(notes?|comments?|remarks?|message|description|bio|free_?text|body)$`)},
 }
 
@@ -87,6 +95,22 @@ func ByName(column string) string {
 		}
 	}
 	return ""
+}
+
+// personTableRe matches table names that hold people. A bare "name" column
+// is a person's name only there; elsewhere it names a product, a
+// department or a currency.
+var personTableRe = regexp.MustCompile(`person|people|customer|client|user|member|employee|staff|contact|patient|student|applicant|candidate|holder|beneficiar|payee|guarantor|director|shareholder|borrower|investor|tenant|guest|passenger|subscriber|signator|kyc|individual`)
+
+// byNameInTable is ByName, plus bare "name" in a table of people.
+func byNameInTable(column, table string) (string, string) {
+	if l := ByName(column); l != "" {
+		return l, fmt.Sprintf("column name %q matches the %s rule", column, l)
+	}
+	if normalizeName(column) == "name" && personTableRe.MatchString(normalizeName(table)) {
+		return Name, fmt.Sprintf("column %q in table %q, which holds people", column, table)
+	}
+	return "", ""
 }
 
 // Value detectors. Each must be specific enough that most matches in a
@@ -198,6 +222,7 @@ const MinValueShare = 0.8
 // Input describes one column to classify.
 type Input struct {
 	Name     string
+	Table    string   // the table's name, for context
 	DataType string   // engine type name, for evidence and type hints
 	IsText   bool     // values are character data and were sampled
 	IsDate   bool     // date or timestamp type
@@ -215,7 +240,9 @@ type Result struct {
 // Classify combines the name rule and the value detectors.
 //
 //   - A value detector matching at least MinValueShare of non-empty samples
-//     wins, with confidence 0.95 if the name agrees and 0.9 otherwise.
+//     wins, with confidence 0.95 if the name agrees and 0.9 otherwise. The
+//     phone detector is weak (many identifiers are 7 to 15 digits), so it
+//     does not override a name rule for another label.
 //   - Otherwise a name rule gives its label with confidence 0.6, except that
 //     a date-of-birth name needs a date type, and value-checked labels (email,
 //     IBAN, card, IP, phone) drop to 0.4 when samples exist but do not match.
@@ -223,7 +250,8 @@ type Result struct {
 //     confidence 0.3: documents can hold personal data under any key.
 //   - Otherwise the column is labeled none.
 func Classify(in Input) Result {
-	byName := ByName(in.Name)
+	byName, nameEvidence := byNameInTable(in.Name, in.Table)
+	var weak string
 	var nonEmpty []string
 	for _, s := range in.Samples {
 		if strings.TrimSpace(s) != "" {
@@ -240,6 +268,10 @@ func Classify(in Input) Result {
 			}
 			if share := float64(n) / float64(len(nonEmpty)); share >= MinValueShare {
 				ev := []string{fmt.Sprintf("%d of %d sampled values are %s", n, len(nonEmpty), d.desc)}
+				if d.label == Phone && byName != "" && byName != Phone {
+					weak = fmt.Sprintf("%d of %d sampled values look like phone numbers, but the name says otherwise", n, len(nonEmpty))
+					break
+				}
 				conf := 0.9
 				if byName == d.label {
 					conf = 0.95
@@ -257,7 +289,10 @@ func Classify(in Input) Result {
 	case byName == BirthDate && !in.IsDate:
 		return Result{Label: None, Confidence: 0.3, Evidence: []string{"name suggests a date of birth but the type is " + in.DataType}}
 	}
-	ev := []string{fmt.Sprintf("column name %q matches the %s rule", in.Name, byName)}
+	ev := []string{nameEvidence}
+	if weak != "" {
+		ev = append(ev, weak)
+	}
 	conf := 0.6
 	if valueChecked(byName) && in.IsText && len(nonEmpty) > 0 {
 		conf = 0.4

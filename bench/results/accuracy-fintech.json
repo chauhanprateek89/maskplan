@@ -1,0 +1,431 @@
+{
+  "truth": "testdata/fintech/labels.yaml",
+  "source": "maskplan testdata/fintech (synthetic)",
+  "postgres": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+  "date": "2026-10-18",
+  "runs": [
+    {
+      "sample": 100,
+      "seconds": 0.086639866,
+      "score": {
+        "columns": 104,
+        "pii": {
+          "TP": 34,
+          "FP": 5,
+          "FN": 5
+        },
+        "labels": {
+          "free_text": {
+            "TP": 4,
+            "FP": 1,
+            "FN": 2
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 4,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.device.ip_address": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.financial.bank_account": {
+            "TP": 5,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.government_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 5,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          }
+        },
+        "errors": [
+          {
+            "column": "fintech.accounts.bic",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"bic\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 92 rows with TABLESAMPLE BERNOULLI (0.833%) of about 12000"
+          },
+          {
+            "column": "fintech.accounts.sort_code",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"sort_code\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 92 rows with TABLESAMPLE BERNOULLI (0.833%) of about 12000"
+          },
+          {
+            "column": "fintech.customers.county",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 85 rows with TABLESAMPLE BERNOULLI (1%) of about 10000"
+          },
+          {
+            "column": "fintech.payees.reference",
+            "want": "free_text",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 88 rows with TABLESAMPLE BERNOULLI (0.5%) of about 20000"
+          },
+          {
+            "column": "fintech.products.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled 98 rows with TABLESAMPLE BERNOULLI (33.3%) of about 300"
+          },
+          {
+            "column": "fintech.products.ean",
+            "want": "none",
+            "got": "user.contact.phone",
+            "evidence": "98 of 98 sampled values are phone numbers; sampled 98 rows with TABLESAMPLE BERNOULLI (33.3%) of about 300"
+          },
+          {
+            "column": "fintech.staff.staff_no",
+            "want": "user.unique_id",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 109 rows with TABLESAMPLE BERNOULLI (50%) of about 200"
+          },
+          {
+            "column": "fintech.support_tickets.subject",
+            "want": "free_text",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 103 rows with TABLESAMPLE BERNOULLI (2%) of about 5000"
+          },
+          {
+            "column": "fintech.transactions.counterparty_name",
+            "want": "user.name",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 76 rows with TABLESAMPLE BERNOULLI (0.1%) of about 100000"
+          },
+          {
+            "column": "fintech.transactions.terminal_id",
+            "want": "none",
+            "got": "user.contact.phone",
+            "evidence": "38 of 38 sampled values are phone numbers; sampled 76 rows with TABLESAMPLE BERNOULLI (0.1%) of about 100000"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 1000,
+      "seconds": 0.292802494,
+      "score": {
+        "columns": 104,
+        "pii": {
+          "TP": 34,
+          "FP": 5,
+          "FN": 5
+        },
+        "labels": {
+          "free_text": {
+            "TP": 4,
+            "FP": 1,
+            "FN": 2
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 4,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.device.ip_address": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.financial.bank_account": {
+            "TP": 5,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.government_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 5,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          }
+        },
+        "errors": [
+          {
+            "column": "fintech.accounts.bic",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"bic\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 950 rows with TABLESAMPLE BERNOULLI (8.33%) of about 12000"
+          },
+          {
+            "column": "fintech.accounts.sort_code",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"sort_code\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 950 rows with TABLESAMPLE BERNOULLI (8.33%) of about 12000"
+          },
+          {
+            "column": "fintech.customers.county",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 980 rows with TABLESAMPLE BERNOULLI (10%) of about 10000"
+          },
+          {
+            "column": "fintech.payees.reference",
+            "want": "free_text",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 926 rows with TABLESAMPLE BERNOULLI (5%) of about 20000"
+          },
+          {
+            "column": "fintech.products.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 300 rows"
+          },
+          {
+            "column": "fintech.products.ean",
+            "want": "none",
+            "got": "user.contact.phone",
+            "evidence": "300 of 300 sampled values are phone numbers; sampled all 300 rows"
+          },
+          {
+            "column": "fintech.staff.staff_no",
+            "want": "user.unique_id",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 200 rows"
+          },
+          {
+            "column": "fintech.support_tickets.subject",
+            "want": "free_text",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 1035 rows with TABLESAMPLE BERNOULLI (20%) of about 5000"
+          },
+          {
+            "column": "fintech.transactions.counterparty_name",
+            "want": "user.name",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 875 rows with TABLESAMPLE BERNOULLI (1%) of about 100000"
+          },
+          {
+            "column": "fintech.transactions.terminal_id",
+            "want": "none",
+            "got": "user.contact.phone",
+            "evidence": "523 of 523 sampled values are phone numbers; sampled 875 rows with TABLESAMPLE BERNOULLI (1%) of about 100000"
+          }
+        ]
+      }
+    },
+    {
+      "sample": 10000,
+      "seconds": 2.721752006,
+      "score": {
+        "columns": 104,
+        "pii": {
+          "TP": 34,
+          "FP": 5,
+          "FN": 5
+        },
+        "labels": {
+          "free_text": {
+            "TP": 4,
+            "FP": 1,
+            "FN": 2
+          },
+          "user.contact.address": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.contact.address.postal_code": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.email": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.contact.phone": {
+            "TP": 4,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.demographic.date_of_birth": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.demographic.gender": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.device.ip_address": {
+            "TP": 2,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.financial.bank_account": {
+            "TP": 5,
+            "FP": 2,
+            "FN": 0
+          },
+          "user.financial.credit_card": {
+            "TP": 3,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.government_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 0
+          },
+          "user.name": {
+            "TP": 5,
+            "FP": 0,
+            "FN": 1
+          },
+          "user.unique_id": {
+            "TP": 1,
+            "FP": 0,
+            "FN": 1
+          }
+        },
+        "errors": [
+          {
+            "column": "fintech.accounts.bic",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"bic\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 10005 rows with TABLESAMPLE BERNOULLI (83.3%) of about 12000"
+          },
+          {
+            "column": "fintech.accounts.sort_code",
+            "want": "none",
+            "got": "user.financial.bank_account",
+            "evidence": "column name \"sort_code\" matches the user.financial.bank_account rule; sampled values did not confirm it; sampled 10005 rows with TABLESAMPLE BERNOULLI (83.3%) of about 12000"
+          },
+          {
+            "column": "fintech.customers.county",
+            "want": "user.contact.address",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 10000 rows"
+          },
+          {
+            "column": "fintech.payees.reference",
+            "want": "free_text",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 10074 rows with TABLESAMPLE BERNOULLI (50%) of about 20000"
+          },
+          {
+            "column": "fintech.products.description",
+            "want": "none",
+            "got": "free_text",
+            "evidence": "column name \"description\" matches the free_text rule; sampled all 300 rows"
+          },
+          {
+            "column": "fintech.products.ean",
+            "want": "none",
+            "got": "user.contact.phone",
+            "evidence": "300 of 300 sampled values are phone numbers; sampled all 300 rows"
+          },
+          {
+            "column": "fintech.staff.staff_no",
+            "want": "user.unique_id",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 200 rows"
+          },
+          {
+            "column": "fintech.support_tickets.subject",
+            "want": "free_text",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled all 5000 rows"
+          },
+          {
+            "column": "fintech.transactions.counterparty_name",
+            "want": "user.name",
+            "got": "none",
+            "evidence": "no name rule or value detector matched; sampled 9587 rows with TABLESAMPLE BERNOULLI (10%) of about 100000"
+          },
+          {
+            "column": "fintech.transactions.terminal_id",
+            "want": "none",
+            "got": "user.contact.phone",
+            "evidence": "5740 of 5740 sampled values are phone numbers; sampled 9587 rows with TABLESAMPLE BERNOULLI (10%) of about 100000"
+          }
+        ]
+      }
+    }
+  ]
+}

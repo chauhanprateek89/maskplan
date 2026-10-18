@@ -41,6 +41,13 @@ func (o Options) sampleRows() int {
 	return max(o.SampleRows, 0)
 }
 
+// Sampling method thresholds, in pages (8 kB by default). Variables so
+// tests can exercise SYSTEM without loading 80 MB.
+var (
+	bernoulliMaxPages float64 = 10000
+	systemMinPages    float64 = 50
+)
+
 // sampledValueBytes bounds each sampled value; detectors need no more.
 const sampledValueBytes = 256
 
@@ -54,6 +61,7 @@ type pgTable struct {
 	schema, name string
 	kind         byte    // r, p, m or f
 	rows         float64 // planner estimate; <= 0 when unknown
+	pages        float64 // planner estimate
 	populated    bool
 	columns      []pgColumn
 }
@@ -87,6 +95,8 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 		SELECT n.nspname, c.relname, c.relkind::text, c.relispopulated,
 			CASE WHEN c.relkind = 'p' THEN (SELECT sum(x.reltuples) FROM pg_partition_tree(c.oid) pt
 				JOIN pg_class x ON x.oid = pt.relid WHERE pt.isleaf AND x.reltuples > 0) ELSE c.reltuples END,
+			CASE WHEN c.relkind = 'p' THEN (SELECT sum(x.relpages) FROM pg_partition_tree(c.oid) pt
+				JOIN pg_class x ON x.oid = pt.relid WHERE pt.isleaf) ELSE c.relpages END,
 			a.attname, format_type(a.atttypid, a.atttypmod),
 			t.typcategory IN ('S', 'I') OR t.typname IN ('json', 'jsonb', 'xml'),
 			t.typcategory = 'N',
@@ -111,9 +121,9 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 	for rows.Next() {
 		var schema, name, kind string
 		var populated bool
-		var est *float64
+		var est, pages *float64
 		var c pgColumn
-		if err := rows.Scan(&schema, &name, &kind, &populated, &est, &c.name, &c.typ, &c.text, &c.numeric, &c.date, &c.doc, &c.canRead); err != nil {
+		if err := rows.Scan(&schema, &name, &kind, &populated, &est, &pages, &c.name, &c.typ, &c.text, &c.numeric, &c.date, &c.doc, &c.canRead); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -122,6 +132,9 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 			t := &pgTable{schema: schema, name: name, kind: kind[0], populated: populated}
 			if est != nil {
 				t.rows = *est
+			}
+			if pages != nil {
+				t.pages = *pages
 			}
 			tables = append(tables, t)
 		}
@@ -136,7 +149,7 @@ func Postgres(ctx context.Context, conn *pgx.Conn, opts Options) (*classificatio
 		start := len(f.Columns)
 		samples, note := sampleTable(ctx, tx, t, opts.sampleRows())
 		for i, c := range t.columns {
-			in := classify.Input{Name: c.name, DataType: c.typ, IsText: c.sample && samples != nil, IsDate: c.date, IsDoc: c.doc}
+			in := classify.Input{Name: c.name, Table: t.name, DataType: c.typ, IsText: c.sample && samples != nil, IsDate: c.date, IsDoc: c.doc}
 			if samples != nil {
 				in.Samples = samples[i]
 			}
@@ -186,10 +199,13 @@ func markDerived(cols []classification.Column) {
 // saying why nothing was sampled.
 //
 // Tables with more than n rows by the planner's estimate are sampled with
-// TABLESAMPLE SYSTEM, so rows come from the whole table: the first rows are
-// often seed or migrated data, or NULL in columns added later. The seed is
-// fixed so a rescan of unchanged data reads the same rows. Tables without
-// statistics are read with LIMIT, and the note says so.
+// TABLESAMPLE, so rows come from the whole table: the first rows are often
+// seed or migrated data, or NULL in columns added later. The rate aims at
+// about n rows, capped at 2n rows taken in a scattered order. Up to bernoulliMaxPages BERNOULLI
+// picks rows, reading the whole table; above that SYSTEM picks pages, at
+// least systemMinPages of them. The seed
+// is fixed so a rescan of unchanged data reads the same rows. Tables
+// without statistics are read with LIMIT, and the note says so.
 func sampleTable(ctx context.Context, tx pgx.Tx, t *pgTable, n int) ([][]string, string) {
 	switch {
 	case n == 0:
@@ -247,24 +263,39 @@ func sampleTable(ctx context.Context, tx pgx.Tx, t *pgTable, n int) ([][]string,
 	}
 	cols := strings.Join(exprs, ", ")
 	if t.rows > float64(n) {
-		// Pages are sampled, so ask for three times the rows needed.
-		pct := min(100, 300*float64(n)/t.rows)
-		got, err := read(fmt.Sprintf("SELECT %s FROM %s TABLESAMPLE SYSTEM (%g) REPEATABLE (0) LIMIT %d", cols, from, pct, n))
+		method, pct := "BERNOULLI", 100*float64(n)/t.rows
+		if t.pages > bernoulliMaxPages {
+			// Whole pages are sampled; rows within a page were often
+			// written together, so ask for more and from enough pages.
+			method, pct = "SYSTEM", min(100, max(150*float64(n)/t.rows, 100*systemMinPages/t.pages))
+		}
+		// The cap keeps rows in an order scattered across the sample, not
+		// physical order, which would favor the first sampled pages.
+		got, err := read(fmt.Sprintf("SELECT %s FROM %s TABLESAMPLE %s (%g) REPEATABLE (0) ORDER BY md5(ctid::text) LIMIT %d", cols, from, method, pct, 2*n))
 		if err != nil {
 			return nil, "not sampled: " + err.Error()
 		}
 		if got > 0 {
-			return out, fmt.Sprintf("sampled %d rows with TABLESAMPLE SYSTEM (%.3g%%) of about %.0f", got, pct, t.rows)
+			return out, fmt.Sprintf("sampled %d rows with TABLESAMPLE %s (%.3g%%) of about %.0f", got, method, pct, t.rows)
 		}
 	}
-	got, err := read(fmt.Sprintf("SELECT %s FROM %s LIMIT %d", cols, from, n))
-	switch {
-	case err != nil:
+	// One row more than needed tells a whole table from a cut one.
+	got, err := read(fmt.Sprintf("SELECT %s FROM %s LIMIT %d", cols, from, n+1))
+	if err != nil {
 		return nil, "not sampled: " + err.Error()
+	}
+	if got > n {
+		for i := range out {
+			if len(out[i]) > n {
+				out[i] = out[i][:n]
+			}
+		}
+	}
+	switch {
 	case t.rows > float64(n):
-		return out, fmt.Sprintf("sampled the first %d rows (LIMIT): TABLESAMPLE returned none", got)
-	case got == n:
-		return out, fmt.Sprintf("sampled the first %d rows (LIMIT), not a random sample: table statistics are missing or out of date; run ANALYZE and scan again", got)
+		return out, fmt.Sprintf("sampled the first %d rows (LIMIT): TABLESAMPLE returned none", min(got, n))
+	case got > n:
+		return out, fmt.Sprintf("sampled the first %d rows (LIMIT), not a random sample: table statistics are missing or out of date; run ANALYZE and scan again", n)
 	}
 	return out, fmt.Sprintf("sampled all %d rows", got)
 }

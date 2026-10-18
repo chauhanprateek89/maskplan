@@ -68,7 +68,9 @@ func Postgres(ctx context.Context, conn *pgx.Conn, role string, cls *classificat
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '120s'"); err != nil {
+	// With only pg_catalog on the search path, object names in findings
+	// (functions, relations in plans) are always schema-qualified.
+	if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '120s'; SET LOCAL search_path = pg_catalog"); err != nil {
 		return nil, err
 	}
 
@@ -425,7 +427,18 @@ func (s *pgState) explainJSON(query string) (string, *planNode, error) {
 	if len(tree) != 1 {
 		return "", nil, fmt.Errorf("EXPLAIN returned %d plans", len(tree))
 	}
-	canon, err := json.Marshal(generic) // map keys sorted
+	// Only the plan tree: the rest differs between queries with the same
+	// plan (Query Identifier, shown when compute_query_id is on, as it is
+	// wherever pg_stat_statements is loaded).
+	arr, ok := generic.([]any)
+	if !ok || len(arr) != 1 {
+		return "", nil, fmt.Errorf("unexpected EXPLAIN output")
+	}
+	top, ok := arr[0].(map[string]any)
+	if !ok {
+		return "", nil, fmt.Errorf("unexpected EXPLAIN output")
+	}
+	canon, err := json.Marshal(top["Plan"]) // map keys sorted
 	if err != nil {
 		return "", nil, err
 	}
@@ -570,7 +583,10 @@ func trimParens(s string) string {
 }
 
 func (s *pgState) viewFindings() error {
-	q := `SELECT n.nspname, c.relname, a.attname, c.relowner, ` + readersSQL + `, ` + granteesSQL + `
+	q := `SELECT n.nspname, c.relname, a.attname, c.relowner, ` + readersSQL + `, ` + granteesSQL + `,
+			(SELECT e.extname FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
+				WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+					AND d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e')
 		FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind = 'v' AND n.nspname <> $3 AND ` + scopeSQL("n", 2) + `
 		ORDER BY 1, 2, a.attnum`
@@ -579,15 +595,30 @@ func (s *pgState) viewFindings() error {
 		return err
 	}
 	var views []relation
+	extViews := map[[2]string]bool{}
 	for rows.Next() {
 		var r relation
-		if err := rows.Scan(&r.schema, &r.rel, &r.col, &r.owner, &r.readers, &r.tblGrantees, &r.colGrantees); err != nil {
+		var ext *string
+		if err := rows.Scan(&r.schema, &r.rel, &r.col, &r.owner, &r.readers, &r.tblGrantees, &r.colGrantees, &ext); err != nil {
 			rows.Close()
 			return err
 		}
-		if len(r.readers) > 0 {
-			views = append(views, r)
+		if len(r.readers) == 0 {
+			continue
 		}
+		// Views that belong to an extension (pg_stat_statements, PostGIS's
+		// geometry_columns) read catalogs or extension functions, not
+		// application data. Tracing them would fail every role on most
+		// managed services; they get one WARN each instead.
+		if ext != nil {
+			if k := [2]string{r.schema, r.rel}; !extViews[k] {
+				extViews[k] = true
+				s.add(Finding{Status: Warn, Object: "view " + r.schema + "." + r.rel,
+					Path: "from extension " + *ext + ": extension views are not traced; view: " + s.explain(r)})
+			}
+			continue
+		}
+		views = append(views, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {

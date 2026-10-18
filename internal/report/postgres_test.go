@@ -25,6 +25,7 @@ const testInternal = "mpt_internal"
 const (
 	extAddMember  = "ALTER EXTENSION postgres_fdw ADD FUNCTION mpt_fn.ext_email(int)"
 	extDropMember = "ALTER EXTENSION postgres_fdw DROP FUNCTION mpt_fn.ext_email(int)"
+	extDropView   = "ALTER EXTENSION postgres_fdw DROP VIEW mpt_fn.ext_catalog"
 )
 
 var testSchemas = []string{"mpt_data", "mpt_pub", "mpt_views", "mpt_masked", "mpt_fn", "mpt_sneaky"}
@@ -88,13 +89,17 @@ func dropFixture(t *testing.T, conn *pgx.Conn) {
 	ctx := context.Background()
 	// The extension member must leave the extension first, or dropping its
 	// schema would take postgres_fdw with it.
-	var member bool
-	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_depend
-		WHERE classid = 'pg_proc'::regclass AND objid = to_regprocedure('mpt_fn.ext_email(int)') AND deptype = 'e')`).Scan(&member); err != nil {
+	var fnMember, viewMember bool
+	if err := conn.QueryRow(ctx, `SELECT
+		EXISTS (SELECT 1 FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid = to_regprocedure('mpt_fn.ext_email(int)') AND deptype = 'e'),
+		EXISTS (SELECT 1 FROM pg_depend WHERE classid = 'pg_class'::regclass AND objid = to_regclass('mpt_fn.ext_catalog') AND deptype = 'e')`).Scan(&fnMember, &viewMember); err != nil {
 		t.Fatal(err)
 	}
-	if member {
+	if fnMember {
 		exec(t, conn, extDropMember)
+	}
+	if viewMember {
+		exec(t, conn, extDropView)
 	}
 	for _, s := range append([]string{testInternal}, testSchemas...) {
 		exec(t, conn, "DROP SCHEMA IF EXISTS "+s+" CASCADE")
@@ -273,6 +278,11 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 			// owned by an admin who reads everything, executable by PUBLIC.
 			"CREATE FUNCTION mpt_fn.ext_email(int) RETURNS text LANGUAGE sql SECURITY DEFINER AS 'SELECT email FROM mpt_data.customers WHERE id = $1'",
 			extAddMember,
+			// Like PostGIS's geometry_columns: an extension's view over the
+			// catalog, readable by PUBLIC.
+			"CREATE VIEW mpt_fn.ext_catalog AS SELECT c.relname, a.attname FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid",
+			"ALTER EXTENSION postgres_fdw ADD VIEW mpt_fn.ext_catalog",
+			"GRANT SELECT ON mpt_fn.ext_catalog TO PUBLIC",
 		)
 	}
 	exec(t, conn, "ANALYZE mpt_data.customers", "ANALYZE mpt_internal.key_material")
@@ -375,6 +385,7 @@ func TestReportPostgres(t *testing.T) {
 		// An extension's definer function warns but does not fail a clean role.
 		{role: "mpt_clean", needFDW: true, want: []expect{
 			{Warn, "function mpt_fn.ext_email(integer)", []string{"from extension postgres_fdw", "executable by mpt_clean"}},
+			{Warn, "view mpt_fn.ext_catalog", []string{"from extension postgres_fdw"}},
 		}, pass: true},
 		// A materialized token column is not masked until what fills it is verified.
 		{role: "mpt_derived", want: []expect{
@@ -491,6 +502,26 @@ func TestReportPostgres(t *testing.T) {
 			if !r.Failed() {
 				t.Errorf("%s passed with the key in a view definition", c.role)
 			}
+		}
+	})
+
+	// pg_stat_statements turns on compute_query_id, which adds a query
+	// identifier to EXPLAIN VERBOSE; the plan comparison must ignore it.
+	t.Run("compute_query_id on", func(t *testing.T) {
+		if version < 140000 {
+			t.Skip("compute_query_id is PostgreSQL 14 and later")
+		}
+		exec(t, conn, "SET compute_query_id = on")
+		defer exec(t, conn, "RESET compute_query_id")
+		r := runReport(t, conn, "mpt_clean")
+		masked := 0
+		for _, f := range r.Findings {
+			if f.Status == Masked {
+				masked++
+			}
+		}
+		if masked != 2 || r.Failed() {
+			t.Errorf("with compute_query_id on: %d masked, failed %v\n%s", masked, r.Failed(), dump(r))
 		}
 	})
 

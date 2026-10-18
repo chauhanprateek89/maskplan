@@ -146,7 +146,8 @@ func TestScanPostgres(t *testing.T) {
 
 // TestScanSamplesWholeTablePostgres: the first rows of a table are often
 // seed data or NULL in a column added later. A column that is NULL in its
-// first 2,000 of 20,000 rows must still be recognized from its values.
+// first tenth of the rows must still be recognized from its values, for
+// each sampling method.
 func TestScanSamplesWholeTablePostgres(t *testing.T) {
 	dsn := os.Getenv("MASKPLAN_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -166,6 +167,10 @@ func TestScanSamplesWholeTablePostgres(t *testing.T) {
 		"CREATE SCHEMA " + sch,
 		"CREATE TABLE " + sch + ".people (id int, contact text)",
 		"INSERT INTO " + sch + ".people SELECT g, CASE WHEN g > 2000 THEN 'p' || g || '@example.com' END FROM generate_series(1, 20000) g",
+		// Above the BERNOULLI threshold set below: pages are sampled.
+		"CREATE TABLE " + sch + ".big (id int, contact text)",
+		"INSERT INTO " + sch + ".big SELECT g, CASE WHEN g > 20000 THEN 'b' || g || '@example.com' END FROM generate_series(1, 200000) g",
+		"ANALYZE " + sch + ".big",
 		"ANALYZE " + sch + ".people",
 		"CREATE TABLE " + sch + ".people_p (id int, contact text) PARTITION BY RANGE (id)",
 		"CREATE TABLE " + sch + ".people_p1 PARTITION OF " + sch + ".people_p FOR VALUES FROM (0) TO (100000)",
@@ -176,16 +181,23 @@ func TestScanSamplesWholeTablePostgres(t *testing.T) {
 			t.Fatalf("%v\n%s", err, q)
 		}
 	}
-	f, err := Postgres(ctx, conn, Options{Schemas: []string{sch}, SampleRows: 500})
+	// big has about 900 pages: above this threshold it is sampled by page.
+	defer func(v float64) { bernoulliMaxPages = v }(bernoulliMaxPages)
+	bernoulliMaxPages = 500
+	f, err := Postgres(ctx, conn, Options{Schemas: []string{sch}, SampleRows: 150})
 	if err != nil {
 		t.Fatal(err)
+	}
+	big := f.Index()[classification.Key{Schema: sch, Table: "big", Column: "contact"}]
+	if big.Label != classify.Email || !strings.Contains(fmt.Sprint(big.Evidence), "TABLESAMPLE SYSTEM") {
+		t.Errorf("big.contact: %s %v, want %s by TABLESAMPLE SYSTEM", big.Label, big.Evidence, classify.Email)
 	}
 	for _, table := range []string{"people", "people_p"} { // plain and partitioned
 		c := f.Index()[classification.Key{Schema: sch, Table: table, Column: "contact"}]
 		if c.Label != classify.Email {
 			t.Errorf("%s.contact: %s %v, want %s", table, c.Label, c.Evidence, classify.Email)
 		}
-		if !strings.Contains(fmt.Sprint(c.Evidence), "TABLESAMPLE SYSTEM") {
+		if !strings.Contains(fmt.Sprint(c.Evidence), "TABLESAMPLE BERNOULLI") {
 			t.Errorf("%s: evidence does not record the sampling method: %v", table, c.Evidence)
 		}
 	}

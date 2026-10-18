@@ -1,0 +1,7 @@
+# Stand-in for the extensions managed services install for you (aws_s3,
+# aws_commons and similar): SECURITY DEFINER functions owned by an
+# administrator and executable by PUBLIC. For maskplan's tests only.
+comment = 'maskplan test stand-in for managed-service extensions'
+default_version = '1.0'
+relocatable = false
+schema = public

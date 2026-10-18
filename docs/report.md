@@ -25,7 +25,7 @@ Each entry records its label, a confidence and the evidence. Values matching a d
 
 Rescanning keeps every entry marked `reviewed: true` as it is, including entries for columns that no longer exist, so a dropped and re-added column does not silently lose its review.
 
-**How rows are chosen.** A table with more rows than the sample size, by the planner's estimate, is read with `TABLESAMPLE SYSTEM` with a fixed seed, so rows come from the whole table and a rescan of unchanged data reads the same rows. The first rows of a table are a poor sample: they are often seed or migrated data, or NULL in columns added later. Smaller tables are read whole. A table without statistics is read with `LIMIT`, the first rows only. Every sampled column's evidence says which method was used, for example `sampled 100 rows with TABLESAMPLE SYSTEM (1.5%) of about 20000`, so a reviewer knows what its confidence rests on. Run `ANALYZE` before scanning a database whose statistics are missing.
+**How rows are chosen.** The first rows of a table are a poor sample: they are often seed or migrated data, or NULL in columns added later. So a table with more rows than the sample size, by the planner's estimate, is read with `TABLESAMPLE` and a fixed seed, so rows come from the whole table and a rescan of unchanged data reads the same rows. Up to about 10,000 pages (80 MB) `BERNOULLI` picks rows at a rate aimed at the sample size; larger tables use `SYSTEM`, which picks whole pages, from at least 50 of them. Either way the result is capped at twice the sample size, taking rows in an order scattered across the sample rather than physical order. Smaller tables are read whole. A table without statistics is read with `LIMIT`, the first rows only. Every sampled column's evidence says which method was used, for example `sampled 98 rows with TABLESAMPLE BERNOULLI (1%) of about 10000`, so a reviewer knows what its confidence rests on. Run `ANALYZE` before scanning a database whose statistics are missing.
 
 Foreign tables and unpopulated materialized views are classified by name and type only. The scanning user must be able to `SELECT` a column for it to be sampled.
 
@@ -67,6 +67,7 @@ The rule behind the table: a path the report cannot trace is `UNKNOWN`, never `M
 | --- | --- |
 | `SECURITY DEFINER` function the role can execute, whose owner can read labeled columns | `UNKNOWN` |
 | The same, for a function that belongs to an extension (named in the finding). On managed services extensions are owned by the admin role, which reads everything, so `UNKNOWN` would fail every role | `WARN` |
+| A view that belongs to an extension (`pg_stat_statements`, PostGIS's `geometry_columns`), once per view. They read catalogs or extension functions, not application data; tracing them failed every role in the managed-service simulation | `WARN` |
 | A column, or a view column passing one through, recorded as `derived_from` another (a materialized token column) whose filling is not verified | `UNKNOWN` |
 | User mapping on a foreign server for the role or `PUBLIC` | `UNKNOWN` |
 | `pg_read_server_files`, `pg_write_server_files`, `pg_execute_server_program` | `UNKNOWN` |
@@ -89,11 +90,17 @@ These all err toward `UNKNOWN` or are outside what a catalog report can see. Non
 
 - **Masking written another way is not recognized.** Row-filtered masked views (which keep `security_barrier`), masked views over joins, and hand-written masking show as `UNKNOWN`. They will be recognized once `apply` generates them, by the same plan comparison.
 - **Rows are not evaluated.** The report is per column; row-level security policies are not interpreted.
-- **Extension functions are trusted to the extent of a WARN.** A `SECURITY DEFINER` function that belongs to an extension is reported but does not fail the report. Anyone who can run `ALTER EXTENSION ... ADD FUNCTION` (the extension's owner) could hide a function that way; the finding still names it.
+- **Extension functions and views are trusted to the extent of a WARN.** A `SECURITY DEFINER` function or a view that belongs to an extension is reported but does not fail the report. Anyone who can run `ALTER EXTENSION ... ADD` (the extension's owner) could hide a function or a view that way; the finding still names it. Tables that belong to an extension are checked like any other.
 - **Invoker functions are not followed.** A function that is not `SECURITY DEFINER` runs with the caller's privileges, so it can only read what the report already lists.
 - **Only the hex spelling of a hard-coded key is detected**, not base64 or a key split across literals.
 - **Large objects** are noticed, not classified.
 - **Outside the database**: `pg_hba.conf`, backups, dumps, logs and replicas taken elsewhere are not visible to a catalog query.
+
+### Managed services
+
+**Untested on real RDS, Cloud SQL and Azure Flexible Server; simulated only.** The `managed-sim` CI job builds [`testdata/managed`](../testdata/managed): PostgreSQL 16 with `pgaudit`, `pg_stat_statements` and PostGIS installed by a superuser, plus a stand-in extension shaped like vendor extensions (a `SECURITY DEFINER` function owned by the administrator, executable by `PUBLIC`). `internal/report/managed_test.go` creates roles shaped like RDS's (`rds_superuser` with `pg_monitor`, `rds_iam`, a master user that owns the application), scans the whole database and reports on an agent that logs in through `rds_iam` and reads only a masked view. The agent must pass, with IAM login, `pgaudit.log` and its limits shown; the master user must fail, as a managed admin and owner.
+
+The simulation found two problems before any real service did: every masked view came out UNKNOWN wherever `pg_stat_statements` is loaded (the query identifier in `EXPLAIN` output differed between the two plans being compared), and every role failed on the extensions' own views. Both are fixed and covered by fixtures that run on every PostgreSQL version in CI. What the simulation cannot reproduce is each provider's real catalog: its own roles, extension versions and grants. Until maskplan has run against the real services, treat results there as unverified.
 
 ### How it is tested
 

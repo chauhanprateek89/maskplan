@@ -81,3 +81,24 @@ jobs:
         run: MASKPLAN_TEST_MYSQL_DSN="$DSN" go test ./... -p 1 -run MySQL -v -count=1
       - name: Benchmark smoke test (100k rows; numbers not meaningful on CI)
         run: go run ./bench -engine mysql -dsn "$DSN" -rows 100000 -runs 1
+
+  # A simulated managed service (testdata/managed): pgaudit,
+  # pg_stat_statements, PostGIS, a stand-in vendor extension and RDS-shaped
+  # roles. Not real RDS, Cloud SQL or Azure.
+  managed-sim:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the simulated managed Postgres
+        run: docker build -t maskplan-managed testdata/managed
+      - name: Start it
+        run: |
+          docker run -d --name managed -p 5433:5432 -e POSTGRES_USER=maskplan -e POSTGRES_PASSWORD=maskplan -e POSTGRES_DB=managed maskplan-managed
+          # TCP is up only once the image's init scripts have finished.
+          for i in $(seq 90); do docker exec managed pg_isready -h 127.0.0.1 -U maskplan -d managed && break; sleep 1; done
+          docker exec managed pg_isready -h 127.0.0.1 -U maskplan -d managed
+      - name: Report on the simulated managed service
+        run: MASKPLAN_TEST_MANAGED_DSN=postgres://maskplan:maskplan@localhost:5433/managed go test ./internal/report/ -run Managed -v -count=1

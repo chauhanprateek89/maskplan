@@ -20,6 +20,11 @@ A record of mistakes made while building maskplan, how each was caught, and what
 | 2026-10-18 | `go mod tidy` raised the `go` directive from 1.24.7 to 1.25 through a test-only dependency (`rogpeppe/go-internal` 1.16) | Reading the `go.mod` diff | Pinned go-internal 1.13.1; directive unchanged |
 | 2026-10-18 | During mutation testing two mutants looked like survivors; one did not compile and the other panicked, and the output filter hid both | Re-ran with build errors and panics visible | Both are killed; the third survivor, alias collisions, cannot occur because `EXPLAIN` already makes aliases unique, and the check stays as a backstop |
 | 2026-10-18 | The token-length pattern in the report only knew `SUBSTRING(x FROM 1 FOR n)`; PostgreSQL 13 deparses it as `"substring"(x, 1, n)`, so on 13 the report never compared plans and called a real masked view UNKNOWN (safe direction, but the clean role failed) | CI on Postgres 13; 14 to 17 passed | Pattern accepts both forms; `TestTokenLength` holds both real deparse strings |
+| 2026-10-18 | The first TABLESAMPLE version ran `SYSTEM (100%) ... LIMIT n` on tables smaller than 3n rows, which is the first rows again, and `SYSTEM` on small tables often returned no pages at all | The AdventureWorks evidence strings ("100 rows with TABLESAMPLE SYSTEM (100%) of about 290"), then a test that came back empty | BERNOULLI up to 10,000 pages, SYSTEM above with a 50-page floor, and the 2n cap taken in a scattered order (`md5(ctid)`), not physical order |
+| 2026-10-18 | With `pg_stat_statements` loaded, every masked view was UNKNOWN: `EXPLAIN VERBOSE` adds a per-query identifier, so the two plans compared never matched (safe direction, but MASKED became unreachable on most managed services) | The managed-service simulation | Only the plan tree is compared; a fixture sets `compute_query_id = on` on every version that has it |
+| 2026-10-18 | Extension views (`pg_stat_statements`, PostGIS `geometry_columns`) made every role fail, as UNKNOWN or UNLABELED | The managed-service simulation | One WARN per extension view, with a fixture |
+| 2026-10-18 | Mutation testing again: a mutant of the plan comparison did not compile and looked like a survivor, the same error as the day before | Re-ran with build errors visible | Mutation commands now print build failures |
+
 
 ## Design choices that failed under measurement
 
@@ -37,4 +42,5 @@ These were reasonable on paper and replaced after the 10M-row benchmark. Details
 - Tokens: 28 vectors generated from Go, recomputed independently in Python, and run through the generated SQL on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI.
 - Safety and plan shape: every test in `internal/sqlexpr/plan_test.go` was confirmed to fail against a deliberately broken version of the code it guards (pads via `CROSS JOIN`, `security_barrier` on a column-only view, raw email exposed, row filter without `security_barrier`).
 - Report: every privilege path in `docs/report.md` has a fixture role that must be flagged, on Postgres 13 to 17; a clean role must pass and must fail again after each of ten added paths; the tests were run against deliberately broken versions of the token check, the subquery, whole-row and output-list checks.
+- Classifier: precision and recall per label against ground truth written before each dataset was first scanned (`docs/accuracy.md`); the synthetic bank is a CI gate and was not used for tuning.
 - Benchmarks: every run first checks that the masked views return the Go reference's tokens and that both joins return the expected row count.
