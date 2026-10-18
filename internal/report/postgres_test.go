@@ -608,6 +608,8 @@ func TestReportPostgres(t *testing.T) {
 		}
 	})
 
+	t.Run("canonicalization never makes a perturbed token equal", func(t *testing.T) { canonicalAdversarial(t, conn) })
+
 	t.Run("compute_query_id on", func(t *testing.T) {
 		if version < 140000 {
 			t.Skip("compute_query_id is PostgreSQL 14 and later")
