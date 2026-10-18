@@ -675,10 +675,7 @@ func (s *pgState) viewFindings() error {
 				unlabeled = append(unlabeled, r)
 			}
 		}
-		short := strings.Join(strings.Fields(expr), " ")
-		if len(short) > 120 {
-			short = short[:117] + "..."
-		}
+		short := printableExpr(expr)
 		passthrough := len(pii) == 1 && len(refs) == 1 && trimParens(expr) == pii[0].raw
 		masked := false
 		if !passthrough && singleColumn(refs) {

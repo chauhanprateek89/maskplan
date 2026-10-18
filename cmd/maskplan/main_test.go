@@ -28,8 +28,8 @@ func TestUsageErrors(t *testing.T) {
 		}
 	}
 	var out, errOut bytes.Buffer
-	if code := run([]string{"report", "--role", "r", "--classification", writeEmptyClassification(t), "--dsn", "mysql://u:p@db.invalid/x"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "does not support MySQL") {
-		t.Errorf("report on mysql: exit %d, %s", code, errOut.String())
+	if code := run([]string{"report", "--role", "r", "--classification", writeEmptyClassification(t), "--dsn", "mysql://u:p@db.invalid/x"}, &out, &errOut); code != 2 {
+		t.Errorf("report on an unreachable mysql: exit %d, %s", code, errOut.String())
 	}
 	for in, want := range map[string]string{
 		"mysql://u:p@db.example:3307/app": "u:p@tcp(db.example:3307)/app",
@@ -149,8 +149,8 @@ func TestScanReportPostgres(t *testing.T) {
 	cmd(2, "report", "--role", "mpc_no_such_role", "--classification", cls)
 }
 
-// TestScanMySQL runs scan end to end against MySQL.
-func TestScanMySQL(t *testing.T) {
+// TestScanReportMySQL runs scan and report end to end against MySQL.
+func TestScanReportMySQL(t *testing.T) {
 	dsn := os.Getenv("MASKPLAN_TEST_MYSQL_DSN")
 	if dsn == "" {
 		t.Skip("MASKPLAN_TEST_MYSQL_DSN not set")
@@ -161,14 +161,23 @@ func TestScanMySQL(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := context.Background()
-	for _, q := range []string{"DROP DATABASE IF EXISTS mpc_cli", "CREATE DATABASE mpc_cli",
+	drop := func() {
+		for _, q := range []string{"DROP DATABASE IF EXISTS mpc_cli", "DROP USER IF EXISTS mpc_agent@'%'", "DROP USER IF EXISTS mpc_clean@'%'"} {
+			db.ExecContext(ctx, q)
+		}
+	}
+	drop()
+	defer drop()
+	for _, q := range []string{"CREATE DATABASE mpc_cli",
 		"CREATE TABLE mpc_cli.customers (id int PRIMARY KEY, email varchar(100))",
-		"INSERT INTO mpc_cli.customers VALUES (1, 'a@example.com'), (2, 'b@example.com')"} {
+		"INSERT INTO mpc_cli.customers VALUES (1, 'a@example.com'), (2, 'b@example.com')",
+		"CREATE TABLE mpc_cli.orders (id int PRIMARY KEY, total decimal(10,2))",
+		"CREATE USER mpc_agent@'%' IDENTIFIED BY 'x'", "CREATE USER mpc_clean@'%' IDENTIFIED BY 'x'",
+		"GRANT SELECT ON mpc_cli.customers TO mpc_agent@'%'", "GRANT SELECT ON mpc_cli.orders TO mpc_clean@'%'"} {
 		if _, err := db.ExecContext(ctx, q); err != nil {
 			t.Fatal(err)
 		}
 	}
-	defer db.ExecContext(ctx, "DROP DATABASE IF EXISTS mpc_cli")
 	cls := t.TempDir() + "/classification.yaml"
 	var out, errOut bytes.Buffer
 	if code := run([]string{"scan", "--dsn", dsn, "--schema", "mpc_cli", "--out", cls}, &out, &errOut); code != 0 {
@@ -180,5 +189,16 @@ func TestScanMySQL(t *testing.T) {
 	}
 	if f.Source.Engine != "mysql" || f.Index()[classification.Key{Schema: "mpc_cli", Table: "customers", Column: "email"}].Label != "user.contact.email" {
 		t.Errorf("scan result: %+v", f)
+	}
+	for account, want := range map[string]int{"mpc_agent@%": 1, "mpc_clean": 0} {
+		out.Reset()
+		errOut.Reset()
+		code := run([]string{"report", "--dsn", dsn, "--schema", "mpc_cli", "--classification", cls, "--role", account}, &out, &errOut)
+		if code != want {
+			t.Errorf("report %s: exit %d, want %d\n%s%s", account, code, want, out.String(), errOut.String())
+		}
+	}
+	if !strings.Contains(out.String(), "PASS") {
+		t.Errorf("clean account report:\n%s", out.String())
 	}
 }

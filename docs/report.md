@@ -1,6 +1,6 @@
 # maskplan scan and report
 
-`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later; `scan` also runs on MySQL 8.0 and 8.4, and `report` on MySQL comes next.
+`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later, and MySQL 8.0 and 8.4 (see [MySQL](#mysql)).
 
 ```bash
 export MASKPLAN_DSN=postgres://admin@db.internal:5432/app
@@ -99,6 +99,32 @@ These all err toward `UNKNOWN` or are outside what a catalog report can see. Non
 - **Large objects** are noticed, not classified.
 - **Outside the database**: `pg_hba.conf`, backups, dumps, logs and replicas taken elsewhere are not visible to a catalog query.
 
+### MySQL
+
+`--role` names an account, `user@host`, or `user` when only one account has that name. The report runs as an inspecting account that can read the `mysql` schema and `EXPLAIN` the views in scope, in a read-only transaction with a statement limit.
+
+MySQL has no function that says whether an account can read a column, so the report evaluates the grant tables itself (`mysql.user`, `db`, `tables_priv`, `columns_priv`, `procs_priv`, `global_grants`, `proxies_priv`). Where it does not model something, it over-reports.
+
+**Accounts and roles.** The account itself, every role granted to it directly or through other roles (all can be activated with `SET ROLE`; the finding says which are active at login, by default role or `activate_all_roles_on_login`), and the server's `mandatory_roles`.
+
+**Tables.** A column is readable through global `SELECT`, `SELECT` on a database (patterns with `_` and `%` included), on the table, or on the column. Labeled columns are `RAW`; unlisted ones `UNLABELED`.
+
+**Views.** The optimizer's rewritten statement (`EXPLAIN` then `SHOW WARNINGS`) shows a merged view column in terms of base columns: a plain reference is `RAW`. A column is `MASKED` only if its stored definition is identical to the optimizer's printing of the token maskplan generates for that base column, with the same aliases, reading the real key table. If the optimizer read any data table as a constant (one row, or a primary-key filter), values from the data replace column references in the rewrite, so the column is `UNKNOWN`; so are subqueries, materialized views and anything else the report cannot follow.
+
+| Path | Status |
+| --- | --- |
+| `SQL SECURITY DEFINER` routine the account can execute | `UNKNOWN` |
+| `PROXY` for another account | `UNKNOWN` |
+| `FILE`, `SUPER`, `CREATE USER`, global `GRANT OPTION`, `REPLICATION SLAVE`, `SET_USER_ID`, `SET_ANY_DEFINER`, `ROLE_ADMIN`, `BACKUP_ADMIN`, `CLONE_ADMIN` | `UNKNOWN` |
+| `SELECT` on `mysql.user` (account password hashes) | `UNKNOWN` |
+| Any privilege on the key table, or the key in a view or routine definition | `KEY` |
+| `PROCESS` (other sessions' statements), `AUDIT_ADMIN` | `WARN` |
+| Partial revokes (not evaluated: global grants are taken to apply everywhere); anonymous accounts; binary logging on (the key's `INSERT` is in the binlog) | `WARN` |
+
+**Settings.** The authentication plugin (`AWSAuthenticationPlugin` is reported as IAM), account locked or password expired, `max_user_connections`, an active audit plugin (`audit_log`, `server_audit`), and the server's `max_execution_time`.
+
+**Limits specific to MySQL.** Host matching at login is not evaluated: the report covers the one account named, and warns when anonymous accounts exist. Definer routines are not traced into: every one the account can execute is `UNKNOWN`. `SQL SECURITY INVOKER` views are traced like definer views, which over-reports. A masked view over a table with one row cannot be verified (`UNKNOWN`) until it has more.
+
 ### Managed services
 
 **Untested on real RDS, Cloud SQL and Azure Flexible Server; simulated only.** The `managed-sim` CI job builds [`testdata/managed`](../testdata/managed): PostgreSQL 16 with `pgaudit`, `pg_stat_statements` and PostGIS installed by a superuser, plus a stand-in extension shaped like vendor extensions (a `SECURITY DEFINER` function owned by the administrator, executable by `PUBLIC`). `internal/report/managed_test.go` creates roles shaped like RDS's (`rds_superuser` with `pg_monitor`, `rds_iam`, a master user that owns the application), scans the whole database and reports on an agent that logs in through `rds_iam` and reads only a masked view. The agent must pass, with IAM login, `pgaudit.log` and its limits shown; the master user must fail, as a managed admin and owner.
@@ -107,6 +133,6 @@ The simulation found two problems before any real service did: every masked view
 
 ### How it is tested
 
-`internal/report/postgres_test.go` builds a database with one role per privilege path and checks that each is flagged, on PostgreSQL 13 to 17 in CI: column, table and `PUBLIC` grants; inherited, multi-level and `NOINHERIT` membership; ownership through membership; superuser; `pg_read_all_data`; raw, nested and joined views; expression, subquery, `security_barrier`, keyless-hash, copied-key and hard-coded-key views; views that wrap a real token around raw data, split their expression with a newline literal, use whole-row references, uncorrelated subqueries, `UNION ALL`, CTEs or aggregates (five of these defeated the first version of the report, see [NOTES.md](../NOTES.md)); `SECURITY DEFINER` functions, user-defined and from an extension (a clean role must still pass with one executable by `PUBLIC`); materialized token columns; default privileges; foreign-server user mappings; whole and column-level key-table grants; partitions; materialized views; unlabeled columns; `CREATEROLE`; `REPLICATION`; server-file roles; statistics roles.
+`internal/report/postgres_test.go` and `mysql_test.go` build a database with one role or account per privilege path and checks that each is flagged, on PostgreSQL 13 to 17 in CI: column, table and `PUBLIC` grants; inherited, multi-level and `NOINHERIT` membership; ownership through membership; superuser; `pg_read_all_data`; raw, nested and joined views; expression, subquery, `security_barrier`, keyless-hash, copied-key and hard-coded-key views; views that wrap a real token around raw data, split their expression with a newline literal, use whole-row references, uncorrelated subqueries, `UNION ALL`, CTEs or aggregates (five of these defeated the first version of the report, see [NOTES.md](../NOTES.md)); `SECURITY DEFINER` functions, user-defined and from an extension (a clean role must still pass with one executable by `PUBLIC`); materialized token columns; default privileges; foreign-server user mappings; whole and column-level key-table grants; partitions; materialized views; unlabeled columns; `CREATEROLE`; `REPLICATION`; server-file roles; statistics roles.
 
 A clean role that reads only a maskplan-generated masked view must pass, and is checked to really receive tokens and be denied the base table. Then each of ten extra paths is granted to it in turn, and the report must fail every time.

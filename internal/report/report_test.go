@@ -18,3 +18,16 @@ func TestTokenLength(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactLiterals(t *testing.T) {
+	for in, want := range map[string]string{
+		`('tok_'::text || encode(SUBSTRING(sha256(('\x2e392c332e2871283932'::bytea || x)))`: `('tok_'::text || encode(SUBSTRING(sha256(('…'::bytea || x)))`,
+		`concat('tok_',left(sha2(concat(0x2e392c332e2871283932abcd,x)),16))`:                `concat('tok_',left(sha2(concat(0x…,x)),16))`,
+		`'carol@example.com' AS email`: `'…' AS email`,
+		`'it''s short'`:                `'it''s short'`,
+	} {
+		if got := redactLiterals(in); got != want {
+			t.Errorf("redactLiterals(%s)\n got %s\nwant %s", in, got, want)
+		}
+	}
+}

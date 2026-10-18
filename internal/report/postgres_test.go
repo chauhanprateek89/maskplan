@@ -436,6 +436,7 @@ func TestReportPostgres(t *testing.T) {
 				}
 			}
 			for _, f := range r.Findings {
+				noSecrets(t, f)
 				for _, o := range c.mustNot {
 					if f.Object == o && (f.Status == Raw || f.Status == Unknown || f.Status == Key) {
 						t.Errorf("unexpected %s %s: %s", f.Status, f.Object, f.Path)
@@ -499,6 +500,9 @@ func TestReportPostgres(t *testing.T) {
 			{"mpt_sneaky", []expect{{Unknown, "mpt_sneaky.literal_key.email", []string{"not a maskplan token"}}}},
 		} {
 			r := runReport(t, conn, c.role)
+			for _, f := range r.Findings {
+				noSecrets(t, f)
+			}
 			for _, e := range c.want {
 				found := false
 				for _, f := range r.Findings {

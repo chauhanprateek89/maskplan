@@ -37,8 +37,9 @@ const usage = `usage:
   maskplan scan   --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml]
   maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--schema a,b] [--json]
 
-DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8 (scan only so far)
-user:pass@tcp(host:3306)/db or mysql://user:pass@host:3306/db.
+DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8
+user:pass@tcp(host:3306)/db or mysql://user:pass@host:3306/db. On MySQL, --role
+names an account: user@host, or user when only one account has that name.
 `
 
 func main() {
@@ -209,7 +210,7 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	fl := flag.NewFlagSet("report", flag.ContinueOnError)
 	fl.SetOutput(stderr)
 	dsn := fl.String("dsn", "", "database connection string of an inspecting user (default $MASKPLAN_DSN)")
-	role := fl.String("role", "", "role to report on (required)")
+	role := fl.String("role", "", "role (Postgres) or account, user@host (MySQL), to report on (required)")
 	clsPath := fl.String("classification", "classification.yaml", "classification file from maskplan scan")
 	schemas := fl.String("schema", "", "comma-separated schemas to report on (default: all non-system schemas)")
 	internal := fl.String("internal-schema", "maskplan_internal", "schema holding maskplan's key table")
@@ -235,17 +236,26 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return 2, err
 	}
+	opts := report.Options{Schemas: splitList(*schemas), InternalSchema: *internal}
+	var r *report.Report
 	if isMySQL {
-		return 2, errors.New("report does not support MySQL yet; scan does")
-	}
-	conn, err := connect(ctx, target)
-	if err != nil {
-		return 2, err
-	}
-	defer conn.Close(ctx)
-	r, err := report.Postgres(ctx, conn, *role, cls, report.Options{Schemas: splitList(*schemas), InternalSchema: *internal})
-	if err != nil {
-		return 2, err
+		db, err := sql.Open("mysql", target)
+		if err != nil {
+			return 2, err
+		}
+		defer db.Close()
+		if r, err = report.MySQL(ctx, db, *role, cls, opts); err != nil {
+			return 2, err
+		}
+	} else {
+		conn, err := connect(ctx, target)
+		if err != nil {
+			return 2, err
+		}
+		defer conn.Close(ctx)
+		if r, err = report.Postgres(ctx, conn, *role, cls, opts); err != nil {
+			return 2, err
+		}
 	}
 	if cls.Source.Database != "" && cls.Source.Database != r.Database {
 		fmt.Fprintf(stderr, "maskplan: warning: %s was scanned from database %q, reporting on %q\n", *clsPath, cls.Source.Database, r.Database)
