@@ -81,6 +81,9 @@ func MySQL(p *policy.Policy, source string, cls *classification.File, st *State,
 		if err != nil {
 			return nil, err
 		}
+		if err := distinctViewNames(name, tables); err != nil {
+			return nil, err
+		}
 		account := name + "@" + MySQLHost
 		acct := MySQLAccount(name)
 		if st.Roles[account] && st.Owned[[2]string{"role", account}] != name {

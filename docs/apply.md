@@ -81,6 +81,7 @@ On each Postgres source, in one transaction:
   - a role, `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, with `LOGIN` unless `login: none`. A password is sent as a SCRAM verifier, never as the password, and is not printed; `login: iam` grants `rds_iam`;
   - a schema of the same name, set as its `search_path`, with one view per table. The views are owned by the user running apply and read base tables with its rights, so the role needs, and gets, no privilege on any base table or on `maskplan_internal`;
   - `CONNECTION LIMIT`, `statement_timeout`, and `pgaudit.log = 'read'` as asked.
+- Views are named after their tables, so an identity cannot have two tables of the same name from different schemas; apply refuses rather than let one view replace the other.
 - A view with a `rows` filter is a `security_barrier` view. Without the barrier, the planner could run the role's own `WHERE` clause first, and a function in it would see every row's values. Views without a filter are plain, so the planner can still flatten them and run aggregates in parallel workers ([benchmark](../bench/README.md)).
 - Identities removed from the policy are dropped: their views, their schema, and their role (after `DROP OWNED BY`, which removes grants someone added by hand).
 
@@ -110,6 +111,18 @@ Without `--policy`, `report` recognizes every transform apply generates by plan 
 A view that differs is `UNKNOWN`; one that is missing is `WARN`. Without `--policy`, each filtered view gets a `WARN` naming its filter as not checked.
 
 On MySQL, where views have no rows filter, `--policy` compares the column list, each column's transform and base column (as the report recognizes them), and requires no `WHERE`, `GROUP BY`, `HAVING`, `LIMIT` or `UNION`. The fixtures add a raw column, replace a fake email with another column, and add a `WHERE` clause; each must fail.
+
+## How it is tested
+
+Fixtures in `internal/apply` and `cmd/maskplan` apply policies with every transform on both engines and require the report to pass (see [report.md](report.md#how-it-is-tested)). Beyond fixtures, the `maskplan init` starter was applied unchanged to three realistic schemas, and apply's own report had to pass:
+
+| Schema | Engine | Columns masked | What it found first |
+| --- | --- | --- | --- |
+| Synthetic Irish bank (`testdata/fintech`) | PostgreSQL 16 | 19 | Columns of a partitioned table were UNKNOWN |
+| Sakila | MySQL 8.0 | 11 | Masking over `NOT NULL` columns was not recognized |
+| AdventureWorks (5 schemas) | PostgreSQL 16 | 10 | Nothing |
+
+Both failures were in the safe direction (UNKNOWN, never MASKED) and are fixed; see [NOTES.md](../NOTES.md).
 
 ## Not yet
 

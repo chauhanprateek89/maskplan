@@ -103,6 +103,20 @@ func NormalizerFor(label string) token.Normalizer {
 // tokens can be reversed by trying them all.
 var lowEntropy = map[string]bool{classify.BirthDate: true, classify.PostalCode: true, classify.Gender: true, classify.Marital: true}
 
+// distinctViewNames refuses two tables whose views would have the same name:
+// a view is named after its table, in the identity's schema, so the second
+// would replace the first.
+func distinctViewNames(identity string, tables []*Table) error {
+	seen := map[string]string{}
+	for _, t := range tables {
+		if other, ok := seen[t.Name]; ok {
+			return fmt.Errorf("identity %s: tables %s and %s.%s would both be the view %s.%s; give the identity only one of them", identity, other, t.Schema, t.Name, identity, t.Name)
+		}
+		seen[t.Name] = t.Schema + "." + t.Name
+	}
+	return nil
+}
+
 // IdentityTables returns the tables of an identity that live in source.
 func IdentityTables(p *policy.Policy, source, identity string, all map[[2]string]*Table) ([]*Table, error) {
 	id := p.Identities[identity]
@@ -173,6 +187,9 @@ func Postgres(p *policy.Policy, source string, cls *classification.File, st *Sta
 		id := p.Identities[name]
 		tables, err := IdentityTables(p, source, name, st.Tables)
 		if err != nil {
+			return nil, err
+		}
+		if err := distinctViewNames(name, tables); err != nil {
 			return nil, err
 		}
 		owner, roleOwned := st.Owned[[2]string{"role", name}]
