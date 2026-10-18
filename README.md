@@ -6,13 +6,38 @@ Terraform-style PII policies for Postgres and MySQL, so AI agents query masked d
 
 ## Status
 
-Pre-alpha. Nothing here is a usable tool yet. This repository currently holds the week-1 groundwork from the design:
+Pre-alpha. What works today, on PostgreSQL 13 to 17:
+
+- `maskplan scan` labels personal data from column names, types and a sample of values, and writes `classification.yaml` for review;
+- `maskplan report --role` lists every labeled column a role can read raw, by which privilege path, and whether its reads are audited. Anything it cannot trace is reported as UNKNOWN, never as masked. See [docs/report.md](docs/report.md).
+
+Both only read. Also here:
 
 - the [token specification](docs/token-spec.md), with a Go reference implementation and generated Postgres and MySQL SQL that produce identical tokens;
 - shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI;
 - a [benchmark](bench/README.md) of what masking costs on a 10-million-row table.
 
-The CLI (`maskplan scan`, `report`, `apply`) comes next, starting with a read-only `report`.
+Next: `scan` and `report` on MySQL, then `apply`.
+
+```bash
+go install github.com/chauhanprateek89/maskplan/cmd/maskplan@latest
+export MASKPLAN_DSN=postgres://admin@db.internal:5432/app
+maskplan scan                       # writes classification.yaml; review and commit it
+maskplan report --role ai_agent     # exit 1 if raw personal data is reachable
+```
+
+```
+role: ai_agent    source: postgres 16.15, database app
+
+RAW       public.customers.email  user.contact.email  SELECT on column granted to analysts (by SET ROLE: ai_agent > analysts)
+
+login: password
+audit: none: reads by this role are not logged
+connection limit: none
+statement timeout: none
+
+1 raw. FAIL: raw personal data or key material is, or may be, reachable.
+```
 
 ## The idea
 
@@ -52,19 +77,26 @@ go test ./...                       # unit tests and vector freshness
 python3 scripts/check_vectors.py    # independent check of the vectors
 go run ./cmd/genvectors             # regenerate testdata/vectors.json after changing cases
 
-# Run the vectors against live databases
+# Vectors, scan and report fixtures against live databases. The report
+# fixtures create cluster-wide roles named mpt_*; use a throwaway server
+# and a superuser DSN. -p 1 keeps packages from seeing each other's grants.
 MASKPLAN_TEST_POSTGRES_DSN=postgres://user:pass@localhost:5432/db \
 MASKPLAN_TEST_MYSQL_DSN='user:pass@tcp(127.0.0.1:3306)/db' \
-go test ./internal/sqlexpr/ -v
+go test ./... -p 1 -v
 ```
 
 | Path | Contents |
 | --- | --- |
+| `cmd/maskplan` | The CLI |
+| `internal/classify`, `internal/classification` | Column classifier and `classification.yaml` |
+| `internal/scan` | Postgres scanner |
+| `internal/report` | Exposure report and its adversarial fixtures |
 | `internal/token` | Go reference implementation of the token spec |
 | `internal/sqlexpr` | Postgres and MySQL expression generators, and the live-database vector tests |
 | `internal/vectors`, `testdata/vectors.json` | Shared test vectors and their generator |
 | `bench/` | Benchmark harness and Docker Compose setup |
 | `docs/token-spec.md` | Token specification, version 1 |
+| `docs/report.md` | What scan and report check, statuses and limitations |
 
 ## License
 

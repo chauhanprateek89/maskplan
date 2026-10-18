@@ -47,8 +47,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Vectors on Postgres ${{ matrix.version }}
-        run: MASKPLAN_TEST_POSTGRES_DSN="$DSN" go test ./internal/sqlexpr/ -run Postgres -v -count=1
+      # -p 1: the report fixtures create cluster-wide roles and a PUBLIC user
+      # mapping, which other packages' reports would otherwise see.
+      - name: Vectors, scan and report fixtures on Postgres ${{ matrix.version }}
+        run: MASKPLAN_TEST_POSTGRES_DSN="$DSN" go test ./... -p 1 -run Postgres -v -count=1
       - name: Benchmark smoke test (100k rows; numbers not meaningful on CI)
         run: go run ./bench -engine postgres -dsn "$DSN" -rows 100000 -runs 1
 
@@ -76,6 +78,6 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Vectors on MySQL ${{ matrix.version }}
-        run: MASKPLAN_TEST_MYSQL_DSN="$DSN" go test ./internal/sqlexpr/ -run MySQL -v -count=1
+        run: MASKPLAN_TEST_MYSQL_DSN="$DSN" go test ./... -p 1 -run MySQL -v -count=1
       - name: Benchmark smoke test (100k rows; numbers not meaningful on CI)
         run: go run ./bench -engine mysql -dsn "$DSN" -rows 100000 -runs 1
