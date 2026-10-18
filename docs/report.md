@@ -1,6 +1,6 @@
 # maskplan scan and report
 
-`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later, and MySQL 8.0 and 8.4 (see [MySQL](#mysql)).
+`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later, and MySQL 8.0, 8.4 and 9 (see [MySQL](#mysql)).
 
 ```bash
 export MASKPLAN_DSN=postgres://admin@db.internal:5432/app

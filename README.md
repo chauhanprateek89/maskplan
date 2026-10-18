@@ -6,7 +6,7 @@ Terraform-style PII policies for Postgres and MySQL, so AI agents query masked d
 
 ## Status
 
-Pre-alpha. What works today, on PostgreSQL 13 to 17 and MySQL 8.0 and 8.4:
+Pre-alpha. What works today, on PostgreSQL 13 to 17 and MySQL 8.0, 8.4 and 9:
 
 - `maskplan scan` labels personal data from column names, types and a sample of values, and writes `classification.yaml` for review;
 - `maskplan report --role` lists every labeled column a role can read raw, by which privilege path, and whether its reads are audited. Anything it cannot trace is reported as UNKNOWN, never as masked. See [docs/report.md](docs/report.md).
@@ -27,7 +27,7 @@ These are held out from tuning but not blind: whoever built them knew the classi
 `scan` and `report` only read. Also here:
 
 - the [token specification](docs/token-spec.md), with a Go reference implementation and generated Postgres and MySQL SQL that produce identical tokens;
-- shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI;
+- shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0, 8.4 and the newest 9.x in CI;
 - a [benchmark](bench/README.md) of what masking costs on a 10-million-row table.
 
 Next: runs by people other than its author, and on a real managed service.
