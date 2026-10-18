@@ -35,7 +35,7 @@ var testSchemas = []string{"mpt_data", "mpt_pub", "mpt_views", "mpt_masked", "mp
 // cannot be traced. Every column must come out UNKNOWN, never MASKED. The
 // first five defeated the first version of the report (NOTES.md).
 var sneakyViews = []string{"coalesce_token", "token_concat", "newline_literal", "whole_row", "init_plan",
-	"union_all", "cte", "copied_key_table", "aggregate", "authid", "fake_fallback", "long_prefix"}
+	"union_all", "cte", "copied_key_table", "aggregate", "authid", "fake_fallback", "long_prefix", "part_mixed"}
 
 var testKey = []byte("report-test-key-0123456789abcdef")
 
@@ -237,6 +237,13 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		// A condition on a column that is not personal data: no finding.
 		"CREATE VIEW mpt_masked.big_orders AS SELECT id FROM mpt_data.orders WHERE total > 100",
 		"GRANT SELECT ON mpt_masked.big_orders TO mpt_clean",
+		// Two partitions of one table, one tokenized and one raw: not a read
+		// of the partitioned table, whose members all compute the same.
+		fmt.Sprintf("CREATE VIEW mpt_sneaky.part_mixed AS SELECT %s AS email FROM mpt_data.events_2026 e %s UNION ALL SELECT e.ip::text FROM mpt_parts.events_2027 e",
+			tok("e.ip", classify.IPAddress, token.Trim), from),
+		// The partitioned table itself, masked: an Append over partitions.
+		fmt.Sprintf("CREATE VIEW mpt_masked.events AS SELECT b.id, %s AS ip FROM mpt_data.events b %s", tok("b.ip", classify.IPAddress, token.Trim), from),
+		"GRANT SELECT ON mpt_masked.events TO mpt_clean",
 		// Prefix keeps at most 8 characters; 9 of an email is most of it.
 		"CREATE VIEW mpt_sneaky.long_prefix AS SELECT left(c.email, 9) AS email FROM mpt_data.customers c",
 		// The view lists its subquery's columns in another order. The plan,
@@ -418,7 +425,8 @@ func TestReportPostgres(t *testing.T) {
 			{Masked, "mpt_masked.customers.phone", []string{"maskplan token of " + phone}},
 			{Masked, "mpt_masked.customers.fake_email", []string{"maskplan fake_name of " + email}},
 			{Masked, "mpt_masked.customers.phone_prefix", []string{"maskplan prefix of " + phone}},
-		}, mustNot: []string{email, phone, "mpt_masked.customers.id", "view mpt_masked.big_orders"}, pass: true},
+			{Masked, "mpt_masked.events.ip", []string{"maskplan token of mpt_data.events.ip"}},
+		}, mustNot: []string{email, phone, "mpt_masked.customers.id", "view mpt_masked.big_orders", "mpt_masked.events.id"}, pass: true},
 		{role: "mpt_sneaky", want: append(sneakyExpectations(),
 			expect{Raw, "mpt_sneaky.swapped.email", []string{"passes through " + email}},
 			expect{Unlabeled, "mpt_sneaky.fake_other_column.email", nil},
@@ -613,7 +621,7 @@ func TestReportPostgres(t *testing.T) {
 				masked++
 			}
 		}
-		if masked != 4 || r.Failed() {
+		if masked != 5 || r.Failed() {
 			t.Errorf("with compute_query_id on: %d masked, failed %v\n%s", masked, r.Failed(), dump(r))
 		}
 	})

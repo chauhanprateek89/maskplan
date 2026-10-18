@@ -429,6 +429,7 @@ type colRef struct {
 // planNode is one node of EXPLAIN (FORMAT JSON).
 type planNode struct {
 	NodeType     string     `json:"Node Type"`
+	Relationship string     `json:"Parent Relationship"`
 	RelationName string     `json:"Relation Name"`
 	Schema       string     `json:"Schema"`
 	Alias        string     `json:"Alias"`
@@ -555,6 +556,10 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 		}
 	}
 	walk(root)
+	partitioned := false
+	if expr, ok := s.partitionMembers(root); ok {
+		root, partitioned = &planNode{NodeType: root.NodeType, Output: []string{expr}}, true
+	}
 	if sq := barrierScan(root); sq != nil {
 		p.barrier = sq
 		root = &planNode{NodeType: root.NodeType, Output: []string{sq.expr}}
@@ -575,6 +580,10 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 		r := colRef{raw: m[0], alias: unquote(m[1]), col: unquote(m[2])}
 		if base := aliases[r.alias]; len(base) == 1 && base[0].name != "" {
 			r.schema, r.rel, r.resolved = base[0].schema, base[0].name, true
+			if root, ok := s.roots[[2]string{r.schema, r.rel}]; ok && partitioned {
+				// Read through the root: findings and the reference name it.
+				r.schema, r.rel = root[0], root[1]
+			}
 			r.label, r.labeled = s.label(r.schema, r.rel, r.col)
 			r.isPII = r.labeled && r.label.IsPII()
 			if !r.labeled && (r.schema == "pg_catalog" || r.schema == "information_schema") {
@@ -597,6 +606,57 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 }
 
 type rel struct{ schema, name string }
+
+// partitionMembers recognizes a column read from a partitioned table: an
+// Append (or Merge Append) without an output list whose members each scan
+// a partition of the same root table and compute the same expression,
+// apart from their own alias. It returns the first member's expression;
+// its alias resolves to a partition, which is labeled as its root. A UNION
+// ALL of different tables, or of different expressions, is not this.
+func (s *pgState) partitionMembers(n *planNode) (string, bool) {
+	if (n.NodeType != "Append" && n.NodeType != "Merge Append") || len(n.Output) != 0 {
+		return "", false
+	}
+	var first string
+	var root [2]string
+	members := 0
+	for i := range n.Plans {
+		m := &n.Plans[i]
+		if m.Relationship != "Member" {
+			continue
+		}
+		if m.RelationName == "" || m.Alias == "" || len(m.Output) != 1 {
+			return "", false
+		}
+		r := [2]string{m.Schema, m.RelationName}
+		if base, ok := s.roots[r]; ok {
+			r = base
+		}
+		// The member's own alias, as a qualifier, made the same for all.
+		expr := memberAliasRe(m.Alias).ReplaceAllString(literalRe.ReplaceAllString(m.Output[0], "''"), "${1}@.")
+		if members == 0 {
+			first, root = expr, r
+		} else if expr != first || r != root {
+			return "", false
+		}
+		members++
+	}
+	if members == 0 {
+		return "", false
+	}
+	for i := range n.Plans {
+		if n.Plans[i].Relationship == "Member" {
+			return n.Plans[i].Output[0], true
+		}
+	}
+	return "", false
+}
+
+// memberAliasRe matches alias used as a qualifier, quoted or not.
+func memberAliasRe(alias string) *regexp.Regexp {
+	q := regexp.QuoteMeta(alias)
+	return regexp.MustCompile(`(^|[^A-Za-z0-9_$".])(?:` + q + `|"` + strings.ReplaceAll(q, `"`, `""`) + `")\.`)
+}
 
 // subqueryScan is a view column read through a Subquery Scan: a view that
 // is not flattened, as security_barrier views are not.
