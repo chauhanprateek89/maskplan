@@ -59,7 +59,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ["8.0", "8.4"]
+        # "9" follows the newest 9.x on purpose: the MySQL report relies on
+        # the optimizer not folding `1 + 0 * CRC32(col)` (and on how it
+        # prints rewritten statements), and a new release that changes either
+        # should fail here first.
+        version: ["8.0", "8.4", "9"]
     services:
       mysql:
         image: mysql:${{ matrix.version }}
