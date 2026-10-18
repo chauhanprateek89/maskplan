@@ -197,8 +197,8 @@ func TestScanReportMySQL(t *testing.T) {
 		if code != want {
 			t.Errorf("report %s: exit %d, want %d\n%s%s", account, code, want, out.String(), errOut.String())
 		}
-	}
-	if !strings.Contains(out.String(), "PASS") {
-		t.Errorf("clean account report:\n%s", out.String())
+		if want == 0 && !strings.Contains(out.String(), "PASS") {
+			t.Errorf("clean account report:\n%s", out.String())
+		}
 	}
 }
