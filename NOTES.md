@@ -39,6 +39,7 @@ A record of mistakes made while building maskplan, how each was caught, and what
 | 2026-10-18 | Copying a view's `WHERE` clause into the reference meant any condition passed, including `WHERE email::int > 0`, whose error message hands the role each email, and functions that raise values as notices | Reviewing what the reference trusts | A view whose conditions read a labeled column is UNKNOWN unless `--policy` matches it (fixture `mpt_sneaky.cast_error`) |
 | 2026-10-18 | `transform: null` in YAML is a null, not the string `null`, so the most natural spelling was rejected as unknown transform `""`; the fix, a custom decoder, then dropped unknown-key checking inside rules, so `parms:` was silently ignored | Policy unit tests; the second while writing the first fix | Both handled in the decoder, both tested |
 | 2026-10-18 | `prefix` accepted `keep` up to 64, which shows most of an email and would have been reported MASKED | Writing the long-prefix fixture | `keep` is 1 to 8 in the policy and in the report |
+| 2026-10-18 | When a statement failed, apply's error quoted it, and for the password step on Postgres that is the SCRAM verifier, which can be attacked offline; the printed plan hid it, the error did not | Reading `RunPostgres` while writing `RunMySQL` | Errors quote a statement's display form, which hides the secret, on both engines |
 
 ## Design choices that failed under measurement
 

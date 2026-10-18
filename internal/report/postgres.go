@@ -704,7 +704,7 @@ func (s *pgState) recognize(v *viewPlan) (*recognized, error) {
 		base.label, base.labeled = s.label(base.schema, base.rel, base.col)
 		base.isPII = base.labeled && base.label.IsPII()
 		for _, t := range []string{policy.FakeName, policy.FakeEmail} {
-			expr, join, err := compile.ColumnSQL(policy.Decision{Transform: t, Label: base.label.Label}, compile.Column{Name: col}, base.alias, pads, s.internal)
+			expr, join, err := compile.ColumnSQL(sqlexpr.Postgres, policy.Decision{Transform: t, Label: base.label.Label}, compile.Column{Name: col}, base.alias, pads, s.internal)
 			if err != nil {
 				return nil, nil
 			}
@@ -739,7 +739,7 @@ func (s *pgState) recognize(v *viewPlan) (*recognized, error) {
 			}
 		}
 		for _, d := range ds {
-			if expr, join, err := compile.ColumnSQL(d, c, base.alias, pads, s.internal); err == nil {
+			if expr, join, err := compile.ColumnSQL(sqlexpr.Postgres, d, c, base.alias, pads, s.internal); err == nil {
 				cands = append(cands, candidate{d.Transform, expr, join})
 			}
 		}

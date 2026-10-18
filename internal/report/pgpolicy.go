@@ -71,12 +71,8 @@ func (s *pgState) policyFindings() error {
 	if err != nil {
 		return err
 	}
-	_, pads, err := sqlexpr.KeySource(sqlexpr.Postgres, pgx.Identifier{s.internal, "key_material"}.Sanitize(), "")
-	if err != nil {
-		return err
-	}
 	for _, t := range tables {
-		v, sel, _, err := compile.ViewSelect(p, s.opts.Source, role, t, s.cls, pads, s.internal)
+		v, sel, _, err := compile.ViewSelect(sqlexpr.Postgres, p, s.opts.Source, role, t, s.cls, s.internal)
 		if err != nil {
 			return err
 		}

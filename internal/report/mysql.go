@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
+	"github.com/chauhanprateek89/maskplan/internal/compile"
+	"github.com/chauhanprateek89/maskplan/internal/policy"
 	"github.com/chauhanprateek89/maskplan/internal/sqlexpr"
 	"github.com/chauhanprateek89/maskplan/internal/token"
 )
@@ -23,6 +25,12 @@ import (
 // not model something (partial revokes, host matching at login), it
 // over-reports: grants are taken to apply everywhere they could.
 func MySQL(ctx context.Context, db *sql.DB, account string, cls *classification.File, opts Options) (*Report, error) {
+	if opts.Policy != nil {
+		var err error
+		if opts.Source, err = PolicySource(opts.Policy, "mysql", opts.Source); err != nil {
+			return nil, err
+		}
+	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -38,7 +46,7 @@ func MySQL(ctx context.Context, db *sql.DB, account string, cls *classification.
 	}
 	defer tx.Rollback()
 
-	s := &myState{ctx: ctx, tx: tx, opts: opts, internal: opts.internal(), report: &Report{Engine: "mysql"}}
+	s := &myState{ctx: ctx, tx: tx, opts: opts, internal: opts.internal(), report: &Report{Engine: "mysql"}, recognized: map[string]*myRecognized{}, read: map[string]bool{}, matched: map[string]bool{}}
 	if cls != nil {
 		s.cls = cls.Index()
 	}
@@ -56,6 +64,8 @@ func MySQL(ctx context.Context, db *sql.DB, account string, cls *classification.
 		s.roleFindings,
 		s.columnFindings,
 		s.viewFindings,
+		s.policyFindings,
+		s.conditionFindings,
 		s.routineFindings,
 		s.keyFindings,
 		s.settings,
@@ -103,6 +113,10 @@ type myState struct {
 	procRows []myTableGrant
 	proxies  [][4]string
 	views    map[[2]string]bool // every view on the server
+	// recognized holds the view columns that are maskplan transforms.
+	recognized map[string]*myRecognized
+	read       map[string]bool // views the account can read
+	matched    map[string]bool // views that are the policy's
 }
 
 type myDBGrant struct {
@@ -781,21 +795,33 @@ func (s *myState) viewDefinition(db, view string) (map[string]string, map[string
 	return exprs, from, nil
 }
 
-// isMaskplanToken reports whether a view column is exactly the token
-// maskplan generates for one base column, with the key read from the key
-// table. It compares the view's stored definition of the column with the
-// optimizer's printing of a reference query built with sqlexpr on the same
-// aliases. The reference joins the key table on a condition that is not
-// constant, so the pads print as column references, as in the definition,
-// and not as values.
-func (s *myState) isMaskplanToken(db, view, col string) (bool, error) {
+// myRecognized is a view column that is exactly a maskplan transform of
+// one base column.
+type myRecognized struct {
+	transform string
+	params    map[string]any
+	base      [2]string
+	col       string
+}
+
+var myPrefixLenRe = regexp.MustCompile(`^left\(.*,(\d+)\)$`)
+
+// recognize reports whether a view column is exactly a maskplan transform
+// of one base column, with the key read from the key table. It compares the
+// view's stored definition of the column with the optimizer's printing of a
+// reference query built by the compiler on the same aliases. The reference
+// joins the key table on a condition that is not constant, so the pads print
+// as column references, as in the definition, and not as values. Fake values
+// also need their dictionary join: its index expression is compared the
+// same way.
+func (s *myState) recognize(db, view, col string) (*myRecognized, error) {
 	exprs, from, err := s.viewDefinition(db, view)
 	if err != nil || exprs == nil {
-		return false, err
+		return nil, err
 	}
 	expr, ok := exprs[col]
 	if !ok {
-		return false, nil
+		return nil, nil
 	}
 	keyAlias := ""
 	for alias, rel := range from {
@@ -803,12 +829,7 @@ func (s *myState) isMaskplanToken(db, view, col string) (bool, error) {
 			keyAlias = alias
 		}
 	}
-	lm := myTokenLabelRe.FindStringSubmatch(expr)
-	nm := myTokenLenRe.FindStringSubmatch(expr)
-	if keyAlias == "" || lm == nil || nm == nil {
-		return false, nil
-	}
-	// The one base column: every reference that is not to the key table.
+	// The base column: every reference that is not to maskplan's tables.
 	var alias, column string
 	for _, m := range my2PartRe.FindAllStringSubmatch(myLiteralRe.ReplaceAllString(expr, "''"), -1) {
 		a, c := unquoteMy(m[1]), unquoteMy(m[2])
@@ -816,35 +837,169 @@ func (s *myState) isMaskplanToken(db, view, col string) (bool, error) {
 			continue
 		}
 		if alias != "" && (a != alias || c != column) {
-			return false, nil
+			return nil, nil
 		}
 		alias, column = a, c
 	}
-	base, ok := from[alias]
-	if alias == "" || !ok || s.views[base] {
-		return false, nil
+	type candidate struct {
+		transform, expr, join string
+		params                map[string]any
 	}
-	var n int
-	fmt.Sscanf(nm[1], "%d", &n)
+	var cands []candidate
 	pads := sqlexpr.Pads{IPad: quoteMy(keyAlias) + ".`ipad`", OPad: quoteMy(keyAlias) + ".`opad`"}
-	ref := quoteMy(alias) + "." + quoteMy(column)
-	for _, norm := range []token.Normalizer{token.Email, token.Phone, token.Trim} {
-		texpr, err := sqlexpr.Token(sqlexpr.MySQL, sqlexpr.Column{Expr: ref, Label: lm[1], Normalizer: norm, TokenHexLen: n}, pads)
-		if err != nil {
-			return false, nil
+	if rel, ok := from[alias]; ok && rel == [2]string{s.internal, "names"} && column == "name" {
+		// fake_name, fake_email: the base column is in the dictionary
+		// join, named by its alias; the base table is the one other table.
+		c, ok := strings.CutPrefix(alias, "fake_")
+		if !ok || keyAlias == "" {
+			return nil, nil
 		}
-		q := fmt.Sprintf("SELECT %s AS maskplan_ref FROM %s.%s %s JOIN %s.%s %s ON %s.`id` = 1 + 0 * (%s IS NULL)",
-			texpr, quoteMy(base[0]), quoteMy(base[1]), quoteMy(alias), quoteMy(s.internal), "`key_material`", quoteMy(keyAlias), quoteMy(keyAlias), ref)
-		_, rewritten, err := s.explainMySQL(q)
-		if err != nil {
-			continue
+		fakeAlias := alias
+		alias = ""
+		for a, rel := range from {
+			if rel[0] != s.internal {
+				if alias != "" {
+					return nil, nil
+				}
+				alias = a
+			}
 		}
-		want, _, ok := selectExpr(rewritten, "maskplan_ref")
-		if ok && my3PartRe.ReplaceAllString(want, "$1") == expr {
-			return true, nil
+		column = c
+		lab := s.cls[classification.Key{Schema: from[alias][0], Table: from[alias][1], Column: column}]
+		for _, t := range []string{policy.FakeName, policy.FakeEmail} {
+			e, j, err := compile.ColumnSQL(sqlexpr.MySQL, policy.Decision{Transform: t, Label: lab.Label}, compile.Column{Name: column}, alias, pads, s.internal)
+			if err != nil || !strings.Contains(j, quoteMy(fakeAlias)) {
+				return nil, nil
+			}
+			cands = append(cands, candidate{t, e, j, nil})
+		}
+		// The join must be maskplan's: compare its index expression.
+		idx, ok := fakeIndexExpr(s.viewFrom(db, view), s.internal, fakeAlias)
+		if !ok {
+			return nil, nil
+		}
+		x, err := sqlexpr.FakeIndex(sqlexpr.MySQL, sqlexpr.Column{Expr: quoteMy(alias) + "." + quoteMy(column), Label: unlabeledOr(lab.Label), Normalizer: compile.NormalizerFor(lab.Label)}, pads, compile.DictionarySize)
+		if err != nil {
+			return nil, nil
+		}
+		if want, ok := s.printed(x, from[alias], alias, column, keyAlias, ""); !ok || want != idx {
+			return nil, nil
+		}
+	} else if lm, nm := myTokenLabelRe.FindStringSubmatch(expr), myTokenLenRe.FindStringSubmatch(expr); keyAlias != "" && lm != nil && nm != nil {
+		var n int
+		fmt.Sscanf(nm[1], "%d", &n)
+		ref := quoteMy(alias) + "." + quoteMy(column)
+		for _, norm := range []token.Normalizer{token.Email, token.Phone, token.Trim} {
+			t, err := sqlexpr.Token(sqlexpr.MySQL, sqlexpr.Column{Expr: ref, Label: lm[1], Normalizer: norm, TokenHexLen: n}, pads)
+			if err != nil {
+				return nil, nil
+			}
+			cands = append(cands, candidate{policy.Token, t, "", nil})
+		}
+	} else {
+		c := compile.Column{Name: column, Category: "D"}
+		ds := []policy.Decision{{Transform: policy.GeneralizeYear}, {Transform: policy.GeneralizeMonth}}
+		if m := myPrefixLenRe.FindStringSubmatch(expr); m != nil {
+			var n int
+			if _, err := fmt.Sscanf(m[1], "%d", &n); err == nil {
+				ds = append(ds, policy.Decision{Transform: policy.Prefix, Params: map[string]any{"keep": n}})
+			}
+		}
+		for _, d := range ds {
+			if e, j, err := compile.ColumnSQL(sqlexpr.MySQL, d, c, alias, pads, s.internal); err == nil {
+				cands = append(cands, candidate{d.Transform, e, j, d.Params})
+			}
 		}
 	}
-	return false, nil
+	base, ok := from[alias]
+	if alias == "" || !ok || s.views[base] || base[0] == s.internal {
+		return nil, nil
+	}
+	for _, c := range cands {
+		if want, ok := s.printed(c.expr, base, alias, column, keyAlias, c.join); ok && want == expr {
+			return &myRecognized{transform: c.transform, params: c.params, base: base, col: column}, nil
+		}
+	}
+	return nil, nil
+}
+
+func unlabeledOr(label string) string {
+	if label == "" || label == classification.None {
+		return "maskplan.unlabeled"
+	}
+	return label
+}
+
+// printed returns how the optimizer prints expr as a select expression of
+// a reference query over base (aliased alias), with the key table joined
+// on a condition that is not constant and the extra join, with database
+// qualifiers removed as in a stored view definition.
+func (s *myState) printed(expr string, base [2]string, alias, column, keyAlias, join string) (string, bool) {
+	keyJoin := ""
+	if keyAlias != "" {
+		keyJoin = fmt.Sprintf(" JOIN %s.`key_material` %s ON %s.`id` = 1 + 0 * (%s.%s IS NULL)",
+			quoteMy(s.internal), quoteMy(keyAlias), quoteMy(keyAlias), quoteMy(alias), quoteMy(column))
+	}
+	q := fmt.Sprintf("SELECT %s AS maskplan_ref FROM %s.%s %s%s%s", expr, quoteMy(base[0]), quoteMy(base[1]), quoteMy(alias), keyJoin, strings.ReplaceAll(join, "\n", " "))
+	_, rewritten, err := s.explainMySQL(q)
+	if err != nil {
+		return "", false
+	}
+	want, _, ok := selectExpr(rewritten, "maskplan_ref")
+	return my3PartRe.ReplaceAllString(want, "$1"), ok
+}
+
+// viewFrom returns the FROM clause of a view's stored definition.
+func (s *myState) viewFrom(db, view string) string {
+	var def string
+	if err := s.tx.QueryRowContext(s.ctx, "SELECT VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?", db, view).Scan(&def); err != nil {
+		return ""
+	}
+	if !strings.HasPrefix(def, "select ") {
+		return ""
+	}
+	parts := splitTopLevel(def[len("select "):], " from ")
+	if len(parts) != 2 {
+		return ""
+	}
+	return parts[1]
+}
+
+// fakeIndexExpr finds the dictionary join of alias in a stored FROM clause,
+// "left join `internal`.`names` `alias` on((`alias`.`i` = EXPR))", and
+// returns EXPR. It must occur exactly once.
+func fakeIndexExpr(from, internal, alias string) (string, bool) {
+	marker := "left join " + quoteMy(internal) + ".`names` " + quoteMy(alias) + " on((" + quoteMy(alias) + ".`i` = "
+	i := strings.Index(from, marker)
+	if i < 0 || strings.Count(from, marker) != 1 {
+		return "", false
+	}
+	rest := from[i+len(marker):]
+	depth, quote := 0, byte(0)
+	for j := 0; j < len(rest); j++ {
+		c := rest[j]
+		switch {
+		case quote != 0:
+			if c == '\\' && quote == '\'' {
+				j++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '`' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth == 0 {
+				if strings.HasPrefix(rest[j:], "))") {
+					return rest[:j], true
+				}
+				return "", false
+			}
+			depth--
+		}
+	}
+	return "", false
 }
 
 func (s *myState) viewFindings() error {
@@ -872,6 +1027,7 @@ func (s *myState) viewFindings() error {
 			continue
 		}
 		obj := c[0] + "." + c[1] + "." + c[2]
+		s.read[c[0]+"."+c[1]] = true
 		access := "view: " + strings.Join(paths, "; ")
 		l, err := s.lineage(c[0], c[1], c[2])
 		if err != nil {
@@ -912,24 +1068,12 @@ func (s *myState) viewFindings() error {
 			}
 		}
 		passthrough := l.untraceable == "" && len(pii) == 1 && len(l.refs) == 1 && strings.TrimSpace(l.expr) == pii[0].raw
-		masked, err := s.isMaskplanToken(c[0], c[1], c[2])
+		rec, err := s.recognize(c[0], c[1], c[2])
 		if err != nil {
 			return err
 		}
-		if masked {
-			// Label it from the base column the definition names.
-			exprs, from, _ := s.viewDefinition(c[0], c[1])
-			refs = refs[:0]
-			for _, m := range my2PartRe.FindAllStringSubmatch(myLiteralRe.ReplaceAllString(exprs[c[2]], "''"), -1) {
-				if b, ok := from[unquoteMy(m[1])]; ok && b != [2]string{s.internal, "key_material"} {
-					lab, _ := s.cls[classification.Key{Schema: b[0], Table: b[1], Column: unquoteMy(m[2])}]
-					refs = append(refs, ref{base: b, col: unquoteMy(m[2]), label: lab})
-					break
-				}
-			}
-			if len(refs) == 0 {
-				masked = false
-			}
+		if rec != nil {
+			s.recognized[c[0]+"."+c[1]+"."+c[2]] = rec
 		}
 		base := func(r ref) string { return r.base[0] + "." + r.base[1] + "." + r.col }
 		switch {
@@ -937,12 +1081,13 @@ func (s *myState) viewFindings() error {
 			s.add(Finding{Status: Unknown, Object: obj, Label: pii[0].label.Label, Path: "passes through " + derivedPath(pii[0].base[0], pii[0].base[1], pii[0].label) + "; " + access})
 		case passthrough:
 			s.add(Finding{Status: Raw, Object: obj, Label: pii[0].label.Label, Path: "passes through " + base(pii[0]) + "; " + access})
-		case masked:
-			s.add(Finding{Status: Masked, Object: obj, Label: refs[0].label.Label, Path: "maskplan token of " + base(refs[0])})
+		case rec != nil:
+			lab := s.cls[classification.Key{Schema: rec.base[0], Table: rec.base[1], Column: rec.col}]
+			s.add(Finding{Status: Masked, Object: obj, Label: lab.Label, Path: "maskplan " + rec.transform + " of " + rec.base[0] + "." + rec.base[1] + "." + rec.col})
 		case l.untraceable != "":
 			s.add(Finding{Status: Unknown, Object: obj, Path: "cannot trace view column to base columns (" + l.untraceable + "): " + short + "; " + access})
 		case len(pii) > 0:
-			s.add(Finding{Status: Unknown, Object: obj, Label: pii[0].label.Label, Path: "expression over " + base(pii[0]) + " is not a maskplan token: " + short + "; " + access})
+			s.add(Finding{Status: Unknown, Object: obj, Label: pii[0].label.Label, Path: "expression over " + base(pii[0]) + " is not a maskplan transform: " + short + "; " + access})
 		case unresolved:
 			s.add(Finding{Status: Unknown, Object: obj, Path: "cannot trace view column to base columns: " + short + "; " + access})
 		case len(unlabeled) > 0:

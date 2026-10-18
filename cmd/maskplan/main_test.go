@@ -308,3 +308,96 @@ rules:
 		t.Errorf("destroy left the role (%v) or a schema (%v)", exists(), internal)
 	}
 }
+
+// TestApplyCLIMySQL runs scan, plan, apply and destroy end to end on MySQL.
+func TestApplyCLIMySQL(t *testing.T) {
+	dsn := os.Getenv("MASKPLAN_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("MASKPLAN_TEST_MYSQL_DSN not set")
+	}
+	ctx := context.Background()
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	drop := func() {
+		for _, q := range []string{"DROP DATABASE IF EXISTS mpc_app", "DROP DATABASE IF EXISTS mpc_reader", "DROP DATABASE IF EXISTS mpc_internal", "DROP USER IF EXISTS mpc_reader@'%'"} {
+			db.ExecContext(ctx, q)
+		}
+	}
+	drop()
+	t.Cleanup(drop)
+	for _, q := range []string{
+		"CREATE DATABASE mpc_app",
+		"CREATE TABLE mpc_app.customers (id int PRIMARY KEY, email varchar(100), full_name varchar(100), signup date)",
+		"INSERT INTO mpc_app.customers VALUES (1, 'u1@example.com', 'Name One', '2024-01-02'), (2, 'u2@example.com', 'Name Two', '2024-01-03'), (3, 'u3@example.com', 'Name Three', '2024-01-04')",
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
+	}
+	dir := t.TempDir()
+	t.Setenv("MPC_DSN", dsn)
+	t.Setenv("MPC_KEY", "cli-test-key-0123456789abcdef!!!")
+	t.Setenv("MPC_READER_PASSWORD", "cli-reader-pw")
+	pol := dir + "/maskplan.yaml"
+	if err := os.WriteFile(pol, []byte(`version: 1
+key: env:MPC_KEY
+sources:
+  app: { engine: mysql, dsn: env:MPC_DSN }
+identities:
+  mpc_reader:
+    sources: [app]
+    tables: [mpc_app.customers]
+    login: password
+    password: env:MPC_READER_PASSWORD
+rules:
+  - { label: user.contact.email, transform: token }
+  - { label: user.name, transform: fake_name }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := func(want int, args ...string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := run(args, &out, &errOut); code != want {
+			t.Fatalf("%v: exit %d, want %d\n%s%s", args, code, want, out.String(), errOut.String())
+		}
+		return out.String()
+	}
+	cls := dir + "/classification.yaml"
+	cmd(0, "scan", "--dsn", dsn, "--schema", "mpc_app", "--out", cls)
+	out := cmd(0, "plan", "--policy", pol, "--internal-schema", "mpc_internal")
+	for _, want := range []string{"CREATE OR REPLACE SQL SECURITY DEFINER VIEW `mpc_reader`.`customers`", "IDENTIFIED BY '…'"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plan lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "cli-reader-pw") || strings.Contains(out, "cli-test-key") {
+		t.Errorf("plan shows a secret:\n%s", out)
+	}
+	for i := 0; i < 2; i++ {
+		out = cmd(0, "apply", "--policy", pol, "--internal-schema", "mpc_internal", "--yes")
+		for _, want := range []string{"source app: apply done", "'mpc_reader'@'%'", "maskplan token of mpc_app.customers.email", "PASS"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("apply %d lacks %q:\n%s", i+1, want, out)
+			}
+		}
+	}
+	report := []string{"report", "--dsn", dsn, "--role", "mpc_reader@%", "--classification", cls, "--policy", pol, "--internal-schema", "mpc_internal"}
+	cmd(0, report...)
+	if _, err := db.ExecContext(ctx, "CREATE OR REPLACE VIEW mpc_reader.customers AS SELECT id, email, full_name, signup FROM mpc_app.customers"); err != nil {
+		t.Fatal(err)
+	}
+	cmd(1, report...)
+	cmd(0, "destroy", "--policy", pol, "--internal-schema", "mpc_internal", "--yes")
+	var left int
+	if err := db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM mysql.user WHERE User = 'mpc_reader')
+		+ (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME IN ('mpc_reader', 'mpc_internal'))`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Errorf("destroy left %d accounts or databases", left)
+	}
+}

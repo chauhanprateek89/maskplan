@@ -115,7 +115,11 @@ func RunPostgres(ctx context.Context, conn *pgx.Conn, plan *compile.Plan) error 
 	defer tx.Rollback(ctx)
 	for _, s := range plan.Statements {
 		if _, err := tx.Exec(ctx, s.SQL, s.Args...); err != nil {
-			return fmt.Errorf("%w\n%s", err, s.SQL)
+			shown := s.SQL
+			if s.Display != "" {
+				shown = s.Display // the SQL holds a secret
+			}
+			return fmt.Errorf("%w\n%s", err, shown)
 		}
 	}
 	return tx.Commit(ctx)

@@ -1,6 +1,6 @@
 # maskplan plan, apply and destroy
 
-`apply` compiles one YAML policy into native database objects: for each agent identity, a role that can log in (or not), a schema of masked views it can read, and its settings. Enforcement then lives in the database: any client that connects as that role gets masked data, with no proxy in the path. PostgreSQL only, so far; MySQL is next.
+`apply` compiles one YAML policy into native database objects: for each agent identity, a role that can log in (or not), a schema of masked views it can read, and its settings. Enforcement then lives in the database: any client that connects as that role gets masked data, with no proxy in the path. PostgreSQL 13 and later, and MySQL 8.0 and 8.4 ([differences](#mysql)). Tokens are the same on both engines, so agents can join across them.
 
 ```bash
 maskplan scan --dsn "$ADMIN_DSN"          # classification.yaml: review it and commit it
@@ -85,6 +85,17 @@ On each Postgres source, in one transaction:
 
 apply refuses to run while a publication replicates all tables (`FOR ALL TABLES`), which would include the key table.
 
+## MySQL
+
+The same policy works with `engine: mysql`, with these differences:
+
+- A **database** plays the part of a schema: each identity gets an account `'name'@'%'` and a database of the same name holding `SQL SECURITY DEFINER` views. The views are defined by the account running apply, which needs `SELECT` on the base tables and the right to create users and grant.
+- **No transaction.** MySQL commits DDL as it goes, so an apply that fails part way leaves part of the plan done. Every statement is idempotent: run apply again to finish it.
+- **Passwords** are sent as `ALTER USER ... IDENTIFIED BY '...'`, which MySQL rewrites without the password in its general, slow and binary logs; the plan shows `'…'`. Passwords containing `'` or `\` are refused, since quoting them depends on the server's SQL mode. `login: iam` uses `AWSAuthenticationPlugin` (RDS and Aurora); `login: none` locks the account.
+- **Refused:** `rows` filters, because MySQL has no security barrier, so a session's own conditions can be evaluated on rows a view's filter excludes; and `audit: read`, because audit plugins filter by account in their own configuration. `statement_timeout` is ignored with a warning: MySQL has no per-account setting.
+- **Grants survive `DROP VIEW`** on MySQL, ready to apply to a later view with the same name, so apply revokes them before dropping a view.
+- The key's `INSERT` is in the **binary log** when binary logging is on; `report` warns about it.
+
 ## Checking it: report --policy
 
 Without `--policy`, `report` recognizes every transform apply generates by plan comparison (see [report.md](report.md)), so it says which columns are masked. A rows filter does not change what a column's values are, so column findings cannot say whether the role sees the right rows. With `--policy`, report compiles each of the role's views from the policy and compares:
@@ -95,9 +106,11 @@ Without `--policy`, `report` recognizes every transform apply generates by plan 
 
 A view that differs is `UNKNOWN`; one that is missing is `WARN`. Without `--policy`, each filtered view gets a `WARN` naming its filter as not checked.
 
+On MySQL, where views have no rows filter, `--policy` compares the column list, each column's transform and base column (as the report recognizes them), and requires no `WHERE`, `GROUP BY`, `HAVING`, `LIMIT` or `UNION`. The fixtures add a raw column, replace a fake email with another column, and add a `WHERE` clause; each must fail.
+
 ## Not yet
 
-- MySQL sources.
+- Rows filters and `audit: read` on MySQL.
 - `derived_from` token columns (materialized tokens kept by a trigger).
 - Key rotation: changing `key` re-keys every token; there is no overlap period.
 - Real managed services: as for report, RDS, Cloud SQL and Azure are simulated, not tested.

@@ -224,7 +224,7 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	schemas := fl.String("schema", "", "comma-separated schemas to report on (default: all non-system schemas)")
 	internal := fl.String("internal-schema", "maskplan_internal", "schema holding maskplan's key table")
 	asJSON := fl.Bool("json", false, "write JSON")
-	policyPath := fl.String("policy", "", "policy file: check that the role's views are the ones it compiles to (Postgres)")
+	policyPath := fl.String("policy", "", "policy file: check that the role's views are the ones it compiles to")
 	source := fl.String("source", "", "with --policy, the policy source this database is (default: its only one of this engine)")
 	if err := fl.Parse(args); err != nil {
 		return 2, err
@@ -255,9 +255,6 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 	var r *report.Report
 	if isMySQL {
-		if opts.Policy != nil {
-			return 2, errors.New("--policy is not supported on MySQL yet")
-		}
 		db, err := sql.Open("mysql", target)
 		if err != nil {
 			return 2, err

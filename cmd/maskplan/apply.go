@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"flag"
 	"fmt"
 	"io"
@@ -64,22 +65,19 @@ func runApply(cmd string, args []string, stdout, stderr io.Writer) (int, error) 
 	code := 0
 	for _, name := range sources {
 		src := p.Sources[name]
-		if src.Engine != "postgres" {
-			return 2, fmt.Errorf("source %s: apply supports postgres sources only, so far", name)
-		}
 		dsn, err := policy.Env(src.DSN)
 		if err != nil {
 			return 2, fmt.Errorf("source %s: %w", name, err)
 		}
-		conn, err := connect(ctx, dsn)
+		e, err := openSource(ctx, src.Engine, dsn, *internal)
 		if err != nil {
 			return 2, fmt.Errorf("source %s: %w", name, err)
 		}
-		defer conn.Close(ctx)
+		defer e.close()
 		var plan *compile.Plan
 		var cls *classification.File
 		if cmd == "destroy" {
-			if plan, err = apply.PlanDestroyPostgres(ctx, conn, *internal); err != nil {
+			if plan, err = e.destroy(); err != nil {
 				return 2, fmt.Errorf("source %s: %w", name, err)
 			}
 			plan.Source = name
@@ -104,7 +102,7 @@ func runApply(cmd string, args []string, stdout, stderr io.Writer) (int, error) 
 				}
 				passwords[id] = pw
 			}
-			if plan, err = apply.PlanPostgres(ctx, conn, p, name, cls, []byte(key), passwords, *internal); err != nil {
+			if plan, err = e.plan(p, name, cls, []byte(key), passwords); err != nil {
 				return 2, fmt.Errorf("source %s: %w", name, err)
 			}
 		}
@@ -115,7 +113,7 @@ func runApply(cmd string, args []string, stdout, stderr io.Writer) (int, error) 
 			}
 			continue
 		}
-		if err := apply.RunPostgres(ctx, conn, plan); err != nil {
+		if err := e.run(plan); err != nil {
 			return 2, fmt.Errorf("source %s: %w", name, err)
 		}
 		fmt.Fprintf(stdout, "\n-- source %s: %s done\n", name, cmd)
@@ -124,7 +122,7 @@ func runApply(cmd string, args []string, stdout, stderr io.Writer) (int, error) 
 		}
 		// Check what was just built, the way an auditor would.
 		for _, id := range identitiesOf(p, name) {
-			r, err := report.Postgres(ctx, conn, id, cls, report.Options{InternalSchema: *internal, Policy: p, Source: name})
+			r, err := e.report(id, cls, report.Options{InternalSchema: *internal, Policy: p, Source: name})
 			if err != nil {
 				return 2, fmt.Errorf("report on %s: %w", id, err)
 			}
@@ -139,6 +137,61 @@ func runApply(cmd string, args []string, stdout, stderr io.Writer) (int, error) 
 		fmt.Fprintln(stderr, "maskplan: a report after apply fails: see above")
 	}
 	return code, nil
+}
+
+// source runs apply's steps on one engine.
+type source struct {
+	plan    func(p *policy.Policy, name string, cls *classification.File, key []byte, passwords map[string]string) (*compile.Plan, error)
+	destroy func() (*compile.Plan, error)
+	run     func(*compile.Plan) error
+	report  func(identity string, cls *classification.File, opts report.Options) (*report.Report, error)
+	close   func()
+}
+
+func openSource(ctx context.Context, engine, dsn, internal string) (*source, error) {
+	switch engine {
+	case "postgres":
+		conn, err := connect(ctx, dsn)
+		if err != nil {
+			return nil, err
+		}
+		return &source{
+			plan: func(p *policy.Policy, name string, cls *classification.File, key []byte, pw map[string]string) (*compile.Plan, error) {
+				return apply.PlanPostgres(ctx, conn, p, name, cls, key, pw, internal)
+			},
+			destroy: func() (*compile.Plan, error) { return apply.PlanDestroyPostgres(ctx, conn, internal) },
+			run:     func(plan *compile.Plan) error { return apply.RunPostgres(ctx, conn, plan) },
+			report: func(id string, cls *classification.File, opts report.Options) (*report.Report, error) {
+				return report.Postgres(ctx, conn, id, cls, opts)
+			},
+			close: func() { conn.Close(ctx) },
+		}, nil
+	case "mysql":
+		target, _, err := resolveDSN(dsn)
+		if err != nil {
+			return nil, err
+		}
+		db, err := sql.Open("mysql", target)
+		if err != nil {
+			return nil, err
+		}
+		if err := db.PingContext(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
+		return &source{
+			plan: func(p *policy.Policy, name string, cls *classification.File, key []byte, pw map[string]string) (*compile.Plan, error) {
+				return apply.PlanMySQL(ctx, db, p, name, cls, key, pw, internal)
+			},
+			destroy: func() (*compile.Plan, error) { return apply.PlanDestroyMySQL(ctx, db, internal) },
+			run:     func(plan *compile.Plan) error { return apply.RunMySQL(ctx, db, plan) },
+			report: func(id string, cls *classification.File, opts report.Options) (*report.Report, error) {
+				return report.MySQL(ctx, db, id+"@"+compile.MySQLHost, cls, opts)
+			},
+			close: func() { db.Close() },
+		}, nil
+	}
+	return nil, fmt.Errorf("unknown engine %q", engine)
 }
 
 func identitiesOf(p *policy.Policy, source string) []string {

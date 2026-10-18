@@ -12,6 +12,7 @@ import (
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
 	"github.com/chauhanprateek89/maskplan/internal/classify"
+	"github.com/chauhanprateek89/maskplan/internal/compile"
 	"github.com/chauhanprateek89/maskplan/internal/sqlexpr"
 	"github.com/chauhanprateek89/maskplan/internal/token"
 )
@@ -89,6 +90,7 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 	ipad, opad := token.Pads(testKey)
 	myExec(t, db,
 		"CREATE TABLE mpt_internal.key_material (id smallint PRIMARY KEY CHECK (id = 1), ipad VARBINARY(64) NOT NULL, opad VARBINARY(64) NOT NULL)",
+		"CREATE TABLE mpt_internal.names (i int PRIMARY KEY, name varchar(64) NOT NULL)",
 		"CREATE TABLE mpt_data.customers (id int PRIMARY KEY, email varchar(100), name varchar(100), phone varchar(32))",
 		// More than one row: the optimizer reads one-row tables as constants.
 		"INSERT INTO mpt_data.customers VALUES (1, 'alice@example.com', 'Alice', '+353 1 234 5678'), (2, 'bob@example.com', 'Bob', '+353 1 234 5679'), (3, 'carol@example.com', 'Carol', '01 234 5670')",
@@ -114,6 +116,13 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		return s
 	}
 	email := tok("c.email", classify.Email, token.Email, pads)
+	fakeIndex := func(expr string) string {
+		x, err := sqlexpr.FakeIndex(sqlexpr.MySQL, sqlexpr.Column{Expr: expr, Label: classify.Email, Normalizer: token.Email}, pads, compile.DictionarySize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
 	myExec(t, db,
 		"CREATE VIEW mpt_views.contacts AS SELECT id, email FROM mpt_data.customers",
 		"CREATE VIEW mpt_views.contacts_nested AS SELECT id, email FROM mpt_views.contacts",
@@ -124,8 +133,16 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		"CREATE SQL SECURITY INVOKER VIEW mpt_views.invoker AS SELECT id, email FROM mpt_data.customers",
 		"CREATE VIEW mpt_views.tiny AS SELECT id, email FROM mpt_data.tiny",
 		"CREATE VIEW mpt_views.contact_tokens AS SELECT id, email_tok FROM mpt_data.contacts",
-		fmt.Sprintf("CREATE VIEW mpt_masked.customers AS SELECT c.id, %s AS email, %s AS phone FROM mpt_data.customers c %s",
-			email, tok("c.phone", classify.Phone, token.Phone, pads), from),
+		// Every transform apply generates; the fake name's join reads the key.
+		fmt.Sprintf("CREATE VIEW mpt_masked.customers AS SELECT c.id, %s AS email, %s AS phone, fake_email.name AS fake_email, left(cast(c.phone AS char), 3) AS phone_prefix FROM mpt_data.customers c %s LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s",
+			email, tok("c.phone", classify.Phone, token.Phone, pads), from, fakeIndex("c.email")),
+		// A fake name that falls back to the raw value, one keyed by another
+		// column than its alias claims, a 9-character prefix, and a WHERE
+		// clause whose error carries the email (JSON_EXTRACT fails on it).
+		fmt.Sprintf("CREATE VIEW mpt_sneaky.fake_fallback AS SELECT c.id, coalesce(fake_email.name, c.email) AS email FROM mpt_data.customers c %s LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s", from, fakeIndex("c.email")),
+		fmt.Sprintf("CREATE VIEW mpt_sneaky.fake_other_column AS SELECT c.id, fake_email.name AS email FROM mpt_data.customers c %s LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s", from, fakeIndex("c.name")),
+		"CREATE VIEW mpt_sneaky.long_prefix AS SELECT c.id, left(cast(c.email AS char), 9) AS email FROM mpt_data.customers c",
+		"CREATE VIEW mpt_sneaky.json_error AS SELECT c.id FROM mpt_data.customers c WHERE json_extract(c.email, '$.x') IS NULL",
 		fmt.Sprintf("CREATE VIEW mpt_sneaky.coalesce_token AS SELECT c.id, coalesce(c.email, %s) AS email FROM mpt_data.customers c %s", email, from),
 		fmt.Sprintf("CREATE VIEW mpt_sneaky.token_concat AS SELECT c.id, concat(%s, c.email) AS email FROM mpt_data.customers c %s", email, from),
 		// Passes every shape check (label, length, key table, one base
@@ -168,6 +185,10 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		"GRANT SELECT ON mpt_sneaky.leaky_left TO mpt_sneaky@'%'",
 		"GRANT SELECT ON mpt_views.one_row TO mpt_tiny@'%'",
 		"GRANT SELECT ON mpt_sneaky.copied_key TO mpt_sneaky@'%'",
+		"GRANT SELECT ON mpt_sneaky.fake_fallback TO mpt_sneaky@'%'",
+		"GRANT SELECT ON mpt_sneaky.fake_other_column TO mpt_sneaky@'%'",
+		"GRANT SELECT ON mpt_sneaky.long_prefix TO mpt_sneaky@'%'",
+		"GRANT SELECT ON mpt_sneaky.json_error TO mpt_sneaky@'%'",
 		"GRANT EXECUTE ON FUNCTION mpt_fn.customer_email TO mpt_secdef@'%'",
 		"GRANT SELECT ON mpt_internal.key_material TO mpt_key@'%'",
 		"GRANT SELECT (ipad) ON mpt_internal.key_material TO mpt_keycol@'%'",
@@ -221,7 +242,7 @@ func TestReportMySQL(t *testing.T) {
 		{"mpt_rawview", []expect{{Raw, "mpt_views.contacts.email", []string{"passes through " + email}}}, []string{email}, false},
 		{"mpt_nested", []expect{{Raw, "mpt_views.contacts_nested.email", []string{"passes through " + email}}}, nil, false},
 		{"mpt_joinview", []expect{{Raw, "mpt_views.order_names.customer", []string{"passes through " + name}}}, nil, false},
-		{"mpt_expr", []expect{{Unknown, "mpt_views.shouting.email", []string{"not a maskplan token"}}}, nil, false},
+		{"mpt_expr", []expect{{Unknown, "mpt_views.shouting.email", []string{"not a maskplan transform"}}}, nil, false},
 		{"mpt_agg", []expect{{Unknown, "mpt_views.agg.email", nil}}, nil, false},
 		{"mpt_sub", []expect{{Unknown, "mpt_views.sub.email", nil}}, nil, false},
 		{"mpt_invoker", []expect{{Raw, "mpt_views.invoker.email", nil}}, nil, false},
@@ -233,11 +254,16 @@ func TestReportMySQL(t *testing.T) {
 		{"mpt_clean", []expect{
 			{Masked, "mpt_masked.customers.email", []string{"maskplan token of " + email}},
 			{Masked, "mpt_masked.customers.phone", []string{"maskplan token of " + phone}},
+			{Masked, "mpt_masked.customers.fake_email", []string{"maskplan fake_name of " + email}},
+			{Masked, "mpt_masked.customers.phone_prefix", []string{"maskplan prefix of " + phone}},
 		}, []string{email, phone}, true},
 		{"mpt_sneaky", []expect{
 			{Unknown, "mpt_sneaky.coalesce_token.email", nil}, {Unknown, "mpt_sneaky.token_concat.email", nil},
 			{Unknown, "mpt_sneaky.fakemask.email", nil}, {Unknown, "mpt_sneaky.copied_key.email", nil},
 			{Unknown, "mpt_sneaky.leaky_left.email", nil},
+			{Unknown, "mpt_sneaky.fake_fallback.email", nil}, {Unlabeled, "mpt_sneaky.fake_other_column.email", nil},
+			{Unknown, "mpt_sneaky.long_prefix.email", nil},
+			{Unknown, "view mpt_sneaky.json_error", []string{"reads " + email + " raw for every row"}},
 		}, []string{email}, false},
 		{"mpt_secdef", []expect{{Unknown, "function mpt_fn.customer_email", []string{"SQL SECURITY DEFINER", "EXECUTE on the routine"}}}, nil, false},
 		{"mpt_key", []expect{{Key, key, []string{"SELECT on the table"}}}, nil, false},

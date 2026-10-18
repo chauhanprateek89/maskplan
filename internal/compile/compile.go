@@ -159,10 +159,6 @@ func Postgres(p *policy.Policy, source string, cls *classification.File, st *Sta
 	add("what apply created, so it changes and drops nothing else",
 		"CREATE TABLE IF NOT EXISTS "+qi(internal, "objects")+" (kind text NOT NULL, name text NOT NULL, identity text NOT NULL, PRIMARY KEY (kind, name))")
 
-	_, pads, err := sqlexpr.KeySource(sqlexpr.Postgres, qi(internal, "key_material"), "")
-	if err != nil {
-		return nil, err
-	}
 	identities := make([]string, 0, len(p.Identities))
 	for name, id := range p.Identities {
 		for _, s := range id.Sources {
@@ -230,7 +226,7 @@ func Postgres(p *policy.Policy, source string, cls *classification.File, st *Sta
 		}
 
 		for _, t := range tables {
-			v, sel, warnings, err := ViewSelect(p, source, name, t, labels, pads, internal)
+			v, sel, warnings, err := ViewSelect(sqlexpr.Postgres, p, source, name, t, labels, internal)
 			if err != nil {
 				return nil, err
 			}
@@ -279,20 +275,25 @@ func Postgres(p *policy.Policy, source string, cls *classification.File, st *Sta
 	return plan, nil
 }
 
-// ViewSelect returns identity's view of t and its SELECT, or an empty
-// SELECT when every column is excluded. report --policy compares views
-// with it.
-func ViewSelect(p *policy.Policy, source, identity string, t *Table, labels map[classification.Key]classification.Column, pads sqlexpr.Pads, internal string) (v View, sel string, warnings []string, err error) {
+// ViewSelect returns identity's view of t and its SELECT on engine e, or
+// an empty SELECT when every column is excluded. report --policy compares
+// views with it.
+func ViewSelect(e sqlexpr.Engine, p *policy.Policy, source, identity string, t *Table, labels map[classification.Key]classification.Column, internal string) (v View, sel string, warnings []string, err error) {
+	keyFrom, pads, err := sqlexpr.KeySource(e, quote(e, internal, "key_material"), "k")
+	if err != nil {
+		return v, "", nil, err
+	}
 	id := p.Identities[identity]
 	v = View{Identity: identity, Name: t.Name, Base: [2]string{t.Schema, t.Name}, Filter: id.Rows[t.Schema+"."+t.Name]}
 	if f, ok := id.Rows[source+":"+t.Schema+"."+t.Name]; ok {
 		v.Filter = f
 	}
 	var exprs, joins []string
+	usesKey := false
 	for _, c := range t.Columns {
 		lc, labeled := labels[classification.Key{Schema: t.Schema, Table: t.Name, Column: c.Name}]
 		d := p.Decide(source, classification.Column{Schema: t.Schema, Table: t.Name, Column: c.Name, Label: lc.Label, DerivedFrom: lc.DerivedFrom}, labeled)
-		expr, join, err := ColumnSQL(d, c, "b", pads, internal)
+		expr, join, err := ColumnSQL(e, d, c, "b", pads, internal)
 		if err != nil {
 			return v, "", nil, fmt.Errorf("%s.%s.%s: %w", t.Schema, t.Name, c.Name, err)
 		}
@@ -305,7 +306,11 @@ func ViewSelect(p *policy.Policy, source, identity string, t *Table, labels map[
 		if d.Transform == policy.Allow && d.Label != "" && d.Label != classification.None {
 			warnings = append(warnings, fmt.Sprintf("%s.%s.%s (%s) is exposed raw to %s by %s", t.Schema, t.Name, c.Name, d.Label, identity, d.Why))
 		}
-		exprs = append(exprs, expr+" AS "+qi(c.Name))
+		switch d.Transform {
+		case policy.Token, policy.FakeName, policy.FakeEmail:
+			usesKey = true
+		}
+		exprs = append(exprs, expr+" AS "+quote(e, c.Name))
 		if join != "" {
 			joins = append(joins, join)
 		}
@@ -315,12 +320,82 @@ func ViewSelect(p *policy.Policy, source, identity string, t *Table, labels map[
 		warnings = append(warnings, fmt.Sprintf("%s.%s: every column is excluded for %s; no view", t.Schema, t.Name, identity))
 		return v, "", warnings, nil
 	}
+	if usesKey && keyFrom != "" {
+		// MySQL: the key table joins first; fake-value joins read its pads.
+		joins = append([]string{"\n" + keyFrom}, joins...)
+	}
 	where := ""
 	if v.Filter != "" {
 		where = "\nWHERE " + v.Filter
 	}
-	sel = fmt.Sprintf("SELECT %s\nFROM %s b%s%s", strings.Join(exprs, ",\n       "), qi(t.Schema, t.Name), strings.Join(joins, ""), where)
+	sel = fmt.Sprintf("SELECT %s\nFROM %s b%s%s", strings.Join(exprs, ",\n       "), quote(e, t.Schema, t.Name), strings.Join(joins, ""), where)
 	return v, sel, warnings, nil
+}
+
+// quote quotes an identifier, schema-qualified or not, for engine e.
+func quote(e sqlexpr.Engine, parts ...string) string {
+	if e == sqlexpr.MySQL {
+		q := make([]string, len(parts))
+		for i, p := range parts {
+			q[i] = "`" + strings.ReplaceAll(p, "`", "``") + "`"
+		}
+		return strings.Join(q, ".")
+	}
+	return qi(parts...)
+}
+
+// ColumnSQL returns a view column's expression on engine e and, for fake
+// transforms, the dictionary join it needs. The base table's alias is alias.
+func ColumnSQL(e sqlexpr.Engine, d policy.Decision, c Column, alias string, pads sqlexpr.Pads, internal string) (expr, join string, err error) {
+	ref := quote(e, alias, c.Name)
+	col := sqlexpr.Column{Expr: ref, Label: d.Label, Normalizer: NormalizerFor(d.Label)}
+	if col.Label == "" || col.Label == classification.None {
+		col.Label = "maskplan.unlabeled"
+	}
+	switch d.Transform {
+	case policy.Allow:
+		return ref, "", nil
+	case policy.Exclude:
+		return "", "", nil
+	case policy.Null:
+		if e == sqlexpr.MySQL {
+			return "NULL", "", nil
+		}
+		return "NULL::" + c.Type, "", nil
+	case policy.Token:
+		x, err := sqlexpr.Token(e, col, pads)
+		return x, "", err
+	case policy.GeneralizeYear, policy.GeneralizeMonth:
+		if c.Category != "D" {
+			return "", "", fmt.Errorf("%s needs a date or timestamp column, not %s", d.Transform, c.Type)
+		}
+		if d.Transform == policy.GeneralizeYear {
+			x, err := sqlexpr.GeneralizeYear(e, ref)
+			return x, "", err
+		}
+		x, err := sqlexpr.GeneralizeMonth(e, ref)
+		return x, "", err
+	case policy.Prefix:
+		n, err := policy.KeepParam(d.Params)
+		if err != nil {
+			return "", "", err
+		}
+		x, err := sqlexpr.Prefix(e, ref, n)
+		return x, "", err
+	case policy.FakeName, policy.FakeEmail:
+		idx, err := sqlexpr.FakeIndex(e, col, pads, DictionarySize)
+		if err != nil {
+			return "", "", err
+		}
+		n := "fake_" + c.Name
+		join = fmt.Sprintf("\nLEFT JOIN %s %s ON %s = %s", quote(e, internal, "names"), quote(e, n), quote(e, n, "i"), idx)
+		if d.Transform == policy.FakeName {
+			return quote(e, n, "name"), join, nil
+		}
+		x, err := sqlexpr.FakeEmail(e, quote(e, n, "name"))
+		return x, join, err
+	}
+	return "", "", fmt.Errorf("unknown transform %q", d.Transform)
 }
 
 // DestroyPostgres drops everything apply created on a source: the views,
@@ -371,57 +446,6 @@ func dropSQL(o Object, st *State) []string {
 		return nil
 	}
 	return []string{"DROP OWNED BY " + qi(o.Name), "DROP ROLE " + qi(o.Name)}
-}
-
-// ColumnSQL returns a view column's expression and, for fake transforms,
-// the dictionary join it needs. The base table's alias is alias.
-func ColumnSQL(d policy.Decision, c Column, alias string, pads sqlexpr.Pads, internal string) (expr, join string, err error) {
-	ref := qi(alias, c.Name)
-	col := sqlexpr.Column{Expr: ref, Label: d.Label, Normalizer: NormalizerFor(d.Label)}
-	if col.Label == "" || col.Label == classification.None {
-		col.Label = "maskplan.unlabeled"
-	}
-	switch d.Transform {
-	case policy.Allow:
-		return ref, "", nil
-	case policy.Exclude:
-		return "", "", nil
-	case policy.Null:
-		return "NULL::" + c.Type, "", nil
-	case policy.Token:
-		e, err := sqlexpr.Token(sqlexpr.Postgres, col, pads)
-		return e, "", err
-	case policy.GeneralizeYear, policy.GeneralizeMonth:
-		if c.Category != "D" {
-			return "", "", fmt.Errorf("%s needs a date or timestamp column, not %s", d.Transform, c.Type)
-		}
-		if d.Transform == policy.GeneralizeYear {
-			e, err := sqlexpr.GeneralizeYear(sqlexpr.Postgres, ref)
-			return e, "", err
-		}
-		e, err := sqlexpr.GeneralizeMonth(sqlexpr.Postgres, ref)
-		return e, "", err
-	case policy.Prefix:
-		n, err := policy.KeepParam(d.Params)
-		if err != nil {
-			return "", "", err
-		}
-		e, err := sqlexpr.Prefix(sqlexpr.Postgres, ref, n)
-		return e, "", err
-	case policy.FakeName, policy.FakeEmail:
-		idx, err := sqlexpr.FakeIndex(sqlexpr.Postgres, col, pads, DictionarySize)
-		if err != nil {
-			return "", "", err
-		}
-		n := "fake_" + c.Name
-		join = fmt.Sprintf("\nLEFT JOIN %s %s ON %s = %s", qi(internal, "names"), qi(n), qi(n, "i"), idx)
-		if d.Transform == policy.FakeName {
-			return qi(n, "name"), join, nil
-		}
-		e, err := sqlexpr.FakeEmail(sqlexpr.Postgres, qi(n, "name"))
-		return e, join, err
-	}
-	return "", "", fmt.Errorf("unknown transform %q", d.Transform)
 }
 
 func quoteLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }

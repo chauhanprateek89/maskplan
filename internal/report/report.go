@@ -22,7 +22,7 @@ type Status string
 const (
 	// Raw: the role can read this labeled column's real values.
 	Raw Status = "RAW"
-	// Masked: the role reads this labeled column only as maskplan tokens.
+	// Masked: the role reads this labeled column only through a maskplan transform.
 	Masked Status = "MASKED"
 	// Unknown: a path exists that the report cannot trace; treat as raw.
 	Unknown Status = "UNKNOWN"

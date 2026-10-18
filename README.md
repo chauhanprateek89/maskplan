@@ -10,7 +10,7 @@ Pre-alpha. What works today, on PostgreSQL 13 to 17 and MySQL 8.0 and 8.4:
 
 - `maskplan scan` labels personal data from column names, types and a sample of values, and writes `classification.yaml` for review;
 - `maskplan report --role` lists every labeled column a role can read raw, by which privilege path, and whether its reads are audited. Anything it cannot trace is reported as UNKNOWN, never as masked. See [docs/report.md](docs/report.md).
-- `maskplan plan` and `apply` (PostgreSQL only, so far) compile a YAML policy into a login role per agent identity with a schema of masked views (tokens, fake names, generalized dates, prefixes, row filters), audit settings and limits, in one transaction, and then run `report` on every identity to check the result. `destroy` removes it all. See [docs/apply.md](docs/apply.md).
+- `maskplan plan` and `apply` compile a YAML policy into a login role per agent identity with a schema of masked views (tokens, fake names, generalized dates, prefixes, and row filters on Postgres), audit settings and limits, and then run `report` on every identity to check the result. `destroy` removes it all. See [docs/apply.md](docs/apply.md).
 
 On a synthetic Irish bank held out from tuning, `scan` finds every email, IBAN, card number and phone column (recall 1.00 at 100 to 10,000 sampled rows; this is a CI gate), with 0.87 precision and recall for personal data overall. On AdventureWorks, which it was tuned on, 0.86 precision and 0.96 recall. On GitLab's 11,000-column schema with no data, 0.92 precision outside free text and recall of about 0.74. Method, misses and gaps: [docs/accuracy.md](docs/accuracy.md). Managed services (RDS, Cloud SQL, Azure) are simulated in CI, not yet tested for real.
 
@@ -20,7 +20,7 @@ On a synthetic Irish bank held out from tuning, `scan` finds every email, IBAN, 
 - shared test vectors that every implementation must reproduce, checked on Postgres 13 to 17 and MySQL 8.0 and 8.4 in CI;
 - a [benchmark](bench/README.md) of what masking costs on a 10-million-row table.
 
-Next: `apply` on MySQL.
+Next: opt-in `report --as-role`, and a run on real managed services.
 
 ```bash
 go install github.com/chauhanprateek89/maskplan/cmd/maskplan@latest
