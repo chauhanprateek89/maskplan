@@ -36,6 +36,7 @@ func myClassification() *classification.File {
 		}
 	}
 	add("mpt_data", "customers", "id", classify.None, "email", classify.Email, "name", classify.Name, "phone", classify.Phone)
+	add("mpt_data", "staff", "id", classify.None, "email", classify.Email, "name", classify.Name)
 	add("mpt_data", "orders", "id", classify.None, "customer_id", classify.None)
 	add("mpt_data", "tiny", "id", classify.None, "email", classify.Email)
 	add("mpt_data", "contacts", "id", classify.None, "email", classify.Email, "email_tok", classify.Email)
@@ -94,6 +95,10 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		"CREATE TABLE mpt_data.customers (id int PRIMARY KEY, email varchar(100), name varchar(100), phone varchar(32))",
 		// More than one row: the optimizer reads one-row tables as constants.
 		"INSERT INTO mpt_data.customers VALUES (1, 'alice@example.com', 'Alice', '+353 1 234 5678'), (2, 'bob@example.com', 'Bob', '+353 1 234 5679'), (3, 'carol@example.com', 'Carol', '01 234 5670')",
+		// NOT NULL and utf8mb3, as in Sakila: masked views over it are
+		// recognized too.
+		"CREATE TABLE mpt_data.staff (id int PRIMARY KEY, email varchar(100) NOT NULL, name varchar(100) NOT NULL) CHARACTER SET utf8mb3",
+		"INSERT INTO mpt_data.staff VALUES (1, 'dan@example.com', 'Dan'), (2, 'eve@example.com', 'Eve')",
 		"CREATE TABLE mpt_data.orders (id int PRIMARY KEY, customer_id int)",
 		"INSERT INTO mpt_data.orders VALUES (1, 1), (2, 2), (3, 3)",
 		"CREATE TABLE mpt_data.unlabeled (id int, secret_notes text)",
@@ -116,13 +121,14 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		return s
 	}
 	email := tok("c.email", classify.Email, token.Email, pads)
-	fakeIndex := func(expr string) string {
-		x, err := sqlexpr.FakeIndex(sqlexpr.MySQL, sqlexpr.Column{Expr: expr, Label: classify.Email, Normalizer: token.Email}, pads, compile.DictionarySize)
+	fakeIndexNamed := func(expr, label string) string {
+		x, err := sqlexpr.FakeIndex(sqlexpr.MySQL, sqlexpr.Column{Expr: expr, Label: label, Normalizer: compile.NormalizerFor(label)}, pads, compile.DictionarySize)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return x
 	}
+	fakeIndex := func(expr string) string { return fakeIndexNamed(expr, classify.Email) }
 	myExec(t, db,
 		"CREATE VIEW mpt_views.contacts AS SELECT id, email FROM mpt_data.customers",
 		"CREATE VIEW mpt_views.contacts_nested AS SELECT id, email FROM mpt_views.contacts",
@@ -136,6 +142,8 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		// Every transform apply generates; the fake name's join reads the key.
 		fmt.Sprintf("CREATE VIEW mpt_masked.customers AS SELECT c.id, %s AS email, %s AS phone, fake_email.name AS fake_email, left(cast(c.phone AS char), 3) AS phone_prefix FROM mpt_data.customers c %s LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s",
 			email, tok("c.phone", classify.Phone, token.Phone, pads), from, fakeIndex("c.email")),
+		fmt.Sprintf("CREATE VIEW mpt_masked.staff AS SELECT s.id, %s AS email, fake_email.name AS name FROM mpt_data.staff s %s LEFT JOIN mpt_internal.names fake_email ON fake_email.i = %s",
+			tok("s.email", classify.Email, token.Email, pads), from, fakeIndexNamed("s.email", classify.Email)),
 		// A fake name that falls back to the raw value, one keyed by another
 		// column than its alias claims, a 9-character prefix, and a WHERE
 		// clause whose error carries the email (JSON_EXTRACT fails on it).
@@ -179,6 +187,7 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		"GRANT SELECT ON mpt_views.invoker TO mpt_invoker@'%'",
 		"GRANT SELECT ON mpt_views.tiny TO mpt_tiny@'%'",
 		"GRANT SELECT ON mpt_masked.customers TO mpt_clean@'%'",
+		"GRANT SELECT ON mpt_masked.staff TO mpt_clean@'%'",
 		"GRANT EXECUTE ON FUNCTION mpt_fn.invoker_email TO mpt_clean@'%'",
 		"GRANT SELECT ON mpt_sneaky.coalesce_token TO mpt_sneaky@'%'",
 		"GRANT SELECT ON mpt_sneaky.token_concat TO mpt_sneaky@'%'",
@@ -258,6 +267,8 @@ func TestReportMySQL(t *testing.T) {
 			{Masked, "mpt_masked.customers.phone", []string{"maskplan token of " + phone}},
 			{Masked, "mpt_masked.customers.fake_email", []string{"maskplan fake_name of " + email}},
 			{Masked, "mpt_masked.customers.phone_prefix", []string{"maskplan prefix of " + phone}},
+			{Masked, "mpt_masked.staff.email", []string{"maskplan token of mpt_data.staff.email"}},
+			{Masked, "mpt_masked.staff.name", []string{"maskplan fake_name of mpt_data.staff.email"}},
 		}, []string{email, phone}, true},
 		{"mpt_sneaky", []expect{
 			{Unknown, "mpt_sneaky.coalesce_token.email", nil}, {Unknown, "mpt_sneaky.token_concat.email", nil},

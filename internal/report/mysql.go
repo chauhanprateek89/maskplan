@@ -950,7 +950,10 @@ func unlabeledOr(label string) string {
 func (s *myState) printed(expr string, base [2]string, alias, column, keyAlias, join string) (string, bool) {
 	keyJoin := ""
 	if keyAlias != "" {
-		keyJoin = fmt.Sprintf(" JOIN %s.`key_material` %s ON %s.`id` = 1 + 0 * (%s.%s IS NULL)",
+		// The condition must depend on the row in a way the optimizer
+		// cannot fold: on a NOT NULL column it folds "x IS NULL" to false,
+		// reads the key table as a constant and prints the pads as values.
+		keyJoin = fmt.Sprintf(" JOIN %s.`key_material` %s ON %s.`id` = 1 + 0 * CRC32(%s.%s)",
 			quoteMy(s.internal), quoteMy(keyAlias), quoteMy(keyAlias), quoteMy(alias), quoteMy(column))
 	}
 	q := fmt.Sprintf("SELECT %s AS maskplan_ref FROM %s.%s %s%s%s", expr, quoteMy(base[0]), quoteMy(base[1]), quoteMy(alias), keyJoin, strings.ReplaceAll(join, "\n", " "))
