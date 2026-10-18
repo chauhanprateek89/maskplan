@@ -495,7 +495,10 @@ func (s *pgState) lineage(schema, view, col string) (*viewPlan, error) {
 var (
 	// The label and kept length of a deparsed Postgres token expression.
 	tokenLabelRe = regexp.MustCompile(`'([a-z0-9_.]+):'::text`)
-	tokenLenRe   = regexp.MustCompile(`FROM 1 FOR (\d+)\)`)
+	// PostgreSQL 14 and later deparse substring(x from 1 for n) in SQL
+	// syntax, 13 as a function call: "substring"(x, 1, n). The length only
+	// chooses which reference token to build; the plan comparison decides.
+	tokenLenRe = regexp.MustCompile(`(?:FROM 1 FOR |, 1, )(\d+)\), 'hex'::text\)`)
 )
 
 // isMaskplanToken reports whether the view column is exactly a maskplan

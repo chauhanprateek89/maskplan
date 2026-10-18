@@ -19,6 +19,7 @@ A record of mistakes made while building maskplan, how each was caught, and what
 | 2026-10-18 | `inet::text` renders as `10.0.0.1/32`; the IP detector rejected it and the phone detector accepted it | Scan integration test | IP detector accepts the prefix form |
 | 2026-10-18 | `go mod tidy` raised the `go` directive from 1.24.7 to 1.25 through a test-only dependency (`rogpeppe/go-internal` 1.16) | Reading the `go.mod` diff | Pinned go-internal 1.13.1; directive unchanged |
 | 2026-10-18 | During mutation testing two mutants looked like survivors; one did not compile and the other panicked, and the output filter hid both | Re-ran with build errors and panics visible | Both are killed; the third survivor, alias collisions, cannot occur because `EXPLAIN` already makes aliases unique, and the check stays as a backstop |
+| 2026-10-18 | The token-length pattern in the report only knew `SUBSTRING(x FROM 1 FOR n)`; PostgreSQL 13 deparses it as `"substring"(x, 1, n)`, so on 13 the report never compared plans and called a real masked view UNKNOWN (safe direction, but the clean role failed) | CI on Postgres 13; 14 to 17 passed | Pattern accepts both forms; `TestTokenLength` holds both real deparse strings |
 
 ## Design choices that failed under measurement
 
