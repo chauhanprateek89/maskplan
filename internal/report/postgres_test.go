@@ -22,6 +22,11 @@ import (
 
 const testInternal = "mpt_internal"
 
+const (
+	extAddMember  = "ALTER EXTENSION postgres_fdw ADD FUNCTION mpt_fn.ext_email(int)"
+	extDropMember = "ALTER EXTENSION postgres_fdw DROP FUNCTION mpt_fn.ext_email(int)"
+)
+
 var testSchemas = []string{"mpt_data", "mpt_pub", "mpt_views", "mpt_masked", "mpt_fn", "mpt_sneaky"}
 
 // sneakyViews look like, or contain, maskplan tokens but return raw data or
@@ -45,6 +50,8 @@ func testClassification() *classification.File {
 	add("mpt_data", "events", "id", classify.None, "ip", classify.IPAddress, "at", classify.None)
 	add("mpt_data", "customer_mv", "id", classify.None, "email", classify.Email)
 	add("mpt_pub", "leads", "id", classify.None, "email", classify.Email)
+	add("mpt_data", "contacts", "id", classify.None, "email", classify.Email, "email_tok", classify.Email)
+	f.Columns[len(f.Columns)-1].DerivedFrom = "email"
 	return f
 }
 
@@ -79,6 +86,16 @@ func exec(t *testing.T, conn *pgx.Conn, qs ...string) {
 func dropFixture(t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 	ctx := context.Background()
+	// The extension member must leave the extension first, or dropping its
+	// schema would take postgres_fdw with it.
+	var member bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_depend
+		WHERE classid = 'pg_proc'::regclass AND objid = to_regprocedure('mpt_fn.ext_email(int)') AND deptype = 'e')`).Scan(&member); err != nil {
+		t.Fatal(err)
+	}
+	if member {
+		exec(t, conn, extDropMember)
+	}
 	for _, s := range append([]string{testInternal}, testSchemas...) {
 		exec(t, conn, "DROP SCHEMA IF EXISTS "+s+" CASCADE")
 	}
@@ -132,7 +149,7 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"mpt_super SUPERUSER", "mpt_rawview", "mpt_nested", "mpt_joinview", "mpt_expr", "mpt_subquery",
 		"mpt_barrier", "mpt_fakemask", "mpt_clean", "mpt_secdef", "mpt_defpriv", "mpt_fdw", "mpt_key",
 		"mpt_keycol", "mpt_part", "mpt_matview", "mpt_unlab", "mpt_createrole CREATEROLE", "mpt_srvfiles",
-		"mpt_readall", "mpt_nouse", "mpt_sneaky", "mpt_repl REPLICATION", "mpt_stats",
+		"mpt_readall", "mpt_nouse", "mpt_sneaky", "mpt_repl REPLICATION", "mpt_stats", "mpt_derived",
 	}
 	for _, r := range roles {
 		exec(t, conn, "CREATE ROLE "+r)
@@ -158,6 +175,8 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"CREATE TABLE mpt_data.events_2026 PARTITION OF mpt_data.events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
 		"CREATE MATERIALIZED VIEW mpt_data.customer_mv AS SELECT id, email FROM mpt_data.customers",
 		"CREATE TABLE mpt_data.unlabeled (id int, secret_notes text)",
+		"CREATE TABLE mpt_data.contacts (id int, email text, email_tok text)",
+		"CREATE VIEW mpt_views.contact_tokens AS SELECT id, email_tok FROM mpt_data.contacts",
 		"CREATE TABLE mpt_pub.leads (id int, email text)",
 	)
 	if _, err := conn.Exec(ctx, "INSERT INTO mpt_internal.key_material VALUES (1, $1, $2)", ipad, opad); err != nil {
@@ -226,6 +245,9 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"GRANT SELECT ON mpt_data.events_2026 TO mpt_part",
 		"GRANT SELECT ON mpt_data.customer_mv TO mpt_matview",
 		"GRANT SELECT ON mpt_data.unlabeled TO mpt_unlab",
+		"GRANT USAGE ON SCHEMA mpt_data, mpt_views TO mpt_derived",
+		"GRANT SELECT (id, email_tok) ON mpt_data.contacts TO mpt_derived",
+		"GRANT SELECT ON mpt_views.contact_tokens TO mpt_derived",
 		"GRANT pg_read_server_files TO mpt_srvfiles",
 		"GRANT pg_read_all_stats TO mpt_stats",
 		// Last, so it does not apply to the tables above.
@@ -247,6 +269,10 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 			"CREATE EXTENSION IF NOT EXISTS postgres_fdw",
 			"CREATE SERVER mpt_loop FOREIGN DATA WRAPPER postgres_fdw OPTIONS (dbname 'mpt_remote')",
 			"CREATE USER MAPPING FOR mpt_fdw SERVER mpt_loop",
+			// Like extension functions on managed services: SECURITY DEFINER,
+			// owned by an admin who reads everything, executable by PUBLIC.
+			"CREATE FUNCTION mpt_fn.ext_email(int) RETURNS text LANGUAGE sql SECURITY DEFINER AS 'SELECT email FROM mpt_data.customers WHERE id = $1'",
+			extAddMember,
 		)
 	}
 	exec(t, conn, "ANALYZE mpt_data.customers", "ANALYZE mpt_internal.key_material")
@@ -346,6 +372,15 @@ func TestReportPostgres(t *testing.T) {
 			{Masked, "mpt_masked.customers.phone", []string{"maskplan token of " + phone}},
 		}, mustNot: []string{email, phone, "mpt_masked.customers.id"}, pass: true},
 		{role: "mpt_sneaky", want: sneakyExpectations(), mustNot: []string{email}},
+		// An extension's definer function warns but does not fail a clean role.
+		{role: "mpt_clean", needFDW: true, want: []expect{
+			{Warn, "function mpt_fn.ext_email(integer)", []string{"from extension postgres_fdw", "executable by mpt_clean"}},
+		}, pass: true},
+		// A materialized token column is not masked until what fills it is verified.
+		{role: "mpt_derived", want: []expect{
+			{Unknown, "mpt_data.contacts.email_tok", []string{"token column of email", "not verified"}},
+			{Unknown, "mpt_views.contact_tokens.email_tok", []string{"passes through mpt_data.contacts.email_tok", "not verified"}},
+		}, mustNot: []string{"mpt_data.contacts.email"}},
 		{role: "mpt_secdef", want: []expect{{Unknown, "function mpt_fn.customer_email(integer)", []string{"SECURITY DEFINER", "executable by mpt_secdef"}}}},
 		{role: "mpt_defpriv", want: []expect{{Warn, "default privileges in schema mpt_data", []string{"readable by mpt_defpriv"}}}, pass: true},
 		{role: "mpt_fdw", needFDW: true, want: []expect{{Unknown, "foreign server mpt_loop", []string{"user mapping for mpt_fdw"}}}},
@@ -478,6 +513,7 @@ func TestReportPostgres(t *testing.T) {
 		{"superuser", []string{"ALTER ROLE mpt_clean SUPERUSER"}, []string{"ALTER ROLE mpt_clean NOSUPERUSER"}, false},
 		{"server files", []string{"GRANT pg_read_server_files TO mpt_clean"}, []string{"REVOKE pg_read_server_files FROM mpt_clean"}, false},
 		{"replication", []string{"ALTER ROLE mpt_clean REPLICATION"}, []string{"ALTER ROLE mpt_clean NOREPLICATION"}, false},
+		{"definer function leaves its extension", []string{extDropMember}, []string{extAddMember}, true},
 		{"column of a raw table", []string{"GRANT USAGE ON SCHEMA mpt_data TO mpt_clean", "GRANT SELECT (phone) ON mpt_data.customers TO mpt_clean"},
 			[]string{"REVOKE SELECT (phone) ON mpt_data.customers FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_data FROM mpt_clean"}, false},
 	}

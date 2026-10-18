@@ -18,14 +18,18 @@ Exit status: `0` nothing raw is reachable, `1` the report found raw personal dat
 For every column of every table, partitioned table, materialized view and foreign table in scope (partitions are covered by their root), `scan` combines:
 
 - **The column name**, matched against rules for email, phone, name, address, postal code, date of birth, national ID, IBAN, card number, IP address, customer IDs, secrets and free text. `firstName`, `first-name` and `FIRST_NAME` all match.
-- **A sample of values** (100 rows per table by default, `--sample`), for text, network and JSON types. A detector must match at least 80% of non-empty sampled values: email shape, IBAN with a valid mod-97 check, card number passing Luhn, IPv4 or IPv6 address, phone shape (dates and decimals excluded). Number columns are not sampled, because amounts and IDs look like phone numbers.
+- **A sample of values** (100 rows per table by default, `--sample`), for text, network and JSON types. A detector must match at least 80% of non-empty sampled values: email shape, IBAN with a valid mod-97 check, card number passing Luhn, IPv4 or IPv6 address, phone shape (dates and decimals excluded). Number columns are sampled only when their name already suggests a card number, phone number or national ID, since older schemas store those as `bigint` or `numeric`; other number columns are not, because amounts and IDs look like phone numbers.
 - **The type**: a date-of-birth name on a text column is not trusted; JSON and XML columns with no other match are labeled `free_text` at confidence 0.3, because documents can hold personal data under any key.
 
 Each entry records its label, a confidence and the evidence. Values matching a detector win (0.95 when the name agrees, 0.9 otherwise); a name rule alone gives 0.6, or 0.4 when sampled values contradict it. Sampled values stay in memory for one table and are never written anywhere.
 
 Rescanning keeps every entry marked `reviewed: true` as it is, including entries for columns that no longer exist, so a dropped and re-added column does not silently lose its review.
 
-The sample is the first rows the table returns (`LIMIT`), not a random sample. Foreign tables and unpopulated materialized views are classified by name and type only. The scanning user must be able to `SELECT` a column for it to be sampled.
+**How rows are chosen.** A table with more rows than the sample size, by the planner's estimate, is read with `TABLESAMPLE SYSTEM` with a fixed seed, so rows come from the whole table and a rescan of unchanged data reads the same rows. The first rows of a table are a poor sample: they are often seed or migrated data, or NULL in columns added later. Smaller tables are read whole. A table without statistics is read with `LIMIT`, the first rows only. Every sampled column's evidence says which method was used, for example `sampled 100 rows with TABLESAMPLE SYSTEM (1.5%) of about 20000`, so a reviewer knows what its confidence rests on. Run `ANALYZE` before scanning a database whose statistics are missing.
+
+Foreign tables and unpopulated materialized views are classified by name and type only. The scanning user must be able to `SELECT` a column for it to be sampled.
+
+**Token columns.** A column named `X_tok` next to a column `X` in the same table is recorded as `derived_from: X`, with `X`'s label. Materialized token columns are how maskplan will make tokens indexable. The report does not count a derived column as masked: its values are tokens only if whatever writes them computes tokens, which the report cannot yet verify. Until `apply` creates the trigger and the report checks it, reading one is `UNKNOWN`.
 
 ## report
 
@@ -62,6 +66,8 @@ The rule behind the table: a path the report cannot trace is `UNKNOWN`, never `M
 | Path | Status |
 | --- | --- |
 | `SECURITY DEFINER` function the role can execute, whose owner can read labeled columns | `UNKNOWN` |
+| The same, for a function that belongs to an extension (named in the finding). On managed services extensions are owned by the admin role, which reads everything, so `UNKNOWN` would fail every role | `WARN` |
+| A column, or a view column passing one through, recorded as `derived_from` another (a materialized token column) whose filling is not verified | `UNKNOWN` |
 | User mapping on a foreign server for the role or `PUBLIC` | `UNKNOWN` |
 | `pg_read_server_files`, `pg_write_server_files`, `pg_execute_server_program` | `UNKNOWN` |
 | `REPLICATION` attribute (a base backup copies the whole cluster) | `UNKNOWN` |
@@ -83,6 +89,7 @@ These all err toward `UNKNOWN` or are outside what a catalog report can see. Non
 
 - **Masking written another way is not recognized.** Row-filtered masked views (which keep `security_barrier`), masked views over joins, and hand-written masking show as `UNKNOWN`. They will be recognized once `apply` generates them, by the same plan comparison.
 - **Rows are not evaluated.** The report is per column; row-level security policies are not interpreted.
+- **Extension functions are trusted to the extent of a WARN.** A `SECURITY DEFINER` function that belongs to an extension is reported but does not fail the report. Anyone who can run `ALTER EXTENSION ... ADD FUNCTION` (the extension's owner) could hide a function that way; the finding still names it.
 - **Invoker functions are not followed.** A function that is not `SECURITY DEFINER` runs with the caller's privileges, so it can only read what the report already lists.
 - **Only the hex spelling of a hard-coded key is detected**, not base64 or a key split across literals.
 - **Large objects** are noticed, not classified.
@@ -90,6 +97,6 @@ These all err toward `UNKNOWN` or are outside what a catalog report can see. Non
 
 ### How it is tested
 
-`internal/report/postgres_test.go` builds a database with one role per privilege path and checks that each is flagged, on PostgreSQL 13 to 17 in CI: column, table and `PUBLIC` grants; inherited, multi-level and `NOINHERIT` membership; ownership through membership; superuser; `pg_read_all_data`; raw, nested and joined views; expression, subquery, `security_barrier`, keyless-hash, copied-key and hard-coded-key views; views that wrap a real token around raw data, split their expression with a newline literal, use whole-row references, uncorrelated subqueries, `UNION ALL`, CTEs or aggregates (five of these defeated the first version of the report, see [NOTES.md](../NOTES.md)); `SECURITY DEFINER` functions; default privileges; foreign-server user mappings; whole and column-level key-table grants; partitions; materialized views; unlabeled columns; `CREATEROLE`; `REPLICATION`; server-file roles; statistics roles.
+`internal/report/postgres_test.go` builds a database with one role per privilege path and checks that each is flagged, on PostgreSQL 13 to 17 in CI: column, table and `PUBLIC` grants; inherited, multi-level and `NOINHERIT` membership; ownership through membership; superuser; `pg_read_all_data`; raw, nested and joined views; expression, subquery, `security_barrier`, keyless-hash, copied-key and hard-coded-key views; views that wrap a real token around raw data, split their expression with a newline literal, use whole-row references, uncorrelated subqueries, `UNION ALL`, CTEs or aggregates (five of these defeated the first version of the report, see [NOTES.md](../NOTES.md)); `SECURITY DEFINER` functions, user-defined and from an extension (a clean role must still pass with one executable by `PUBLIC`); materialized token columns; default privileges; foreign-server user mappings; whole and column-level key-table grants; partitions; materialized views; unlabeled columns; `CREATEROLE`; `REPLICATION`; server-file roles; statistics roles.
 
 A clean role that reads only a maskplan-generated masked view must pass, and is checked to really receive tokens and be denied the base table. Then each of ten extra paths is granted to it in turn, and the report must fail every time.

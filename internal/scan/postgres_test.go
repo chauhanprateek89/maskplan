@@ -33,13 +33,16 @@ func TestScanPostgres(t *testing.T) {
 		"CREATE SCHEMA " + schema,
 		"CREATE DOMAIN " + schema + ".email_address AS text",
 		`CREATE TABLE ` + schema + `.customers (id int, email text, contact ` + schema + `.email_address, "phoneNumber" varchar(32),
-			iban text, ref text, ip inet, last_seen_from text, dob date, dob_text text, created date, payload jsonb, status text, notes text, amount_cents bigint)`,
+			iban text, ref text, ip inet, last_seen_from text, dob date, dob_text text, created date, payload jsonb, status text, notes text, amount_cents bigint,
+			card_no bigint, mobile_number bigint, balance numeric, email_tok text)`,
 		`INSERT INTO ` + schema + `.customers
 			SELECT g, 'user' || g || '@example.com', 'c' || g || '@example.ie', '+353 1 555 ' || lpad(g::text, 4, '0'),
 				CASE WHEN g % 2 = 0 THEN 'IE29AIBK93115212345678' ELSE 'GB82 WEST 1234 5698 7654 32' END,
 				CASE WHEN g % 2 = 0 THEN '4111111111111111' ELSE '5500 0000 0000 0004' END,
 				('10.0.0.' || g)::inet, '192.168.1.' || g, date '1980-01-01' + g, '1980-01-01', date '2026-01-01' + g,
-				jsonb_build_object('k', g), 'active', NULL, 1000000 + g
+				jsonb_build_object('k', g), 'active', NULL, 1000000 + g,
+				CASE WHEN g % 2 = 0 THEN 4111111111111111 ELSE 5500000000000004 END, 353871230000 + g, 1000.5 + g,
+				'tok_' || md5(g::text)
 			FROM generate_series(1, 50) g`,
 		"CREATE TABLE " + schema + ".events (id int, at date) PARTITION BY RANGE (at)",
 		"CREATE TABLE " + schema + ".events_2026 PARTITION OF " + schema + ".events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
@@ -72,6 +75,10 @@ func TestScanPostgres(t *testing.T) {
 		"customers.status":         classify.None,
 		"customers.notes":          classify.FreeText,
 		"customers.amount_cents":   classify.None, // numbers are not sampled for phone shapes
+		"customers.card_no":        classify.CardNumber,
+		"customers.mobile_number":  classify.Phone,
+		"customers.balance":        classify.None,
+		"customers.email_tok":      classify.Email, // derived from email
 		"events.id":                classify.None,
 		"events.at":                classify.None,
 		"emails.email":             classify.Email,
@@ -95,12 +102,23 @@ func TestScanPostgres(t *testing.T) {
 		}
 		t.Errorf("scanned %d columns, want %d (partitions are scanned through their root): %v", len(f.Columns), len(want), names)
 	}
+	if c := got[classification.Key{Schema: schema, Table: "customers", Column: "email_tok"}]; c.DerivedFrom != "email" {
+		t.Errorf("email_tok derived_from %q, want email", c.DerivedFrom)
+	}
+	if c := got[classification.Key{Schema: schema, Table: "customers", Column: "contact"}]; c.DerivedFrom != "" {
+		t.Errorf("contact derived_from %q, want none", c.DerivedFrom)
+	}
 	mv := got[classification.Key{Schema: schema, Table: "emails", Column: "email"}]
 	if !strings.Contains(fmt.Sprint(mv.Evidence), "not populated") {
 		t.Errorf("unpopulated materialized view evidence: %v", mv.Evidence)
 	}
-	if c := got[classification.Key{Schema: schema, Table: "customers", Column: "email"}]; c.Confidence != 0.95 {
-		t.Errorf("email confidence %.2f, want 0.95 (name and values agree)", c.Confidence)
+	for _, col := range []string{"email", "card_no", "mobile_number"} {
+		if c := got[classification.Key{Schema: schema, Table: "customers", Column: col}]; c.Confidence != 0.95 {
+			t.Errorf("%s confidence %.2f, want 0.95 (name and values agree): %v", col, c.Confidence, c.Evidence)
+		}
+	}
+	if c := got[classification.Key{Schema: schema, Table: "customers", Column: "email"}]; !strings.Contains(fmt.Sprint(c.Evidence), "sampled all 50 rows") {
+		t.Errorf("small table sampling evidence: %v", c.Evidence)
 	}
 
 	// Sampled values must never reach the file.
@@ -123,5 +141,52 @@ func TestScanPostgres(t *testing.T) {
 	}
 	if len(back.Columns) != len(f.Columns) {
 		t.Errorf("round trip: %d columns, want %d", len(back.Columns), len(f.Columns))
+	}
+}
+
+// TestScanSamplesWholeTablePostgres: the first rows of a table are often
+// seed data or NULL in a column added later. A column that is NULL in its
+// first 2,000 of 20,000 rows must still be recognized from its values.
+func TestScanSamplesWholeTablePostgres(t *testing.T) {
+	dsn := os.Getenv("MASKPLAN_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("MASKPLAN_TEST_POSTGRES_DSN not set")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(ctx) })
+	const sch = "mps_sample"
+	drop := func() { conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+sch+" CASCADE") }
+	drop()
+	t.Cleanup(drop)
+	for _, q := range []string{
+		"CREATE SCHEMA " + sch,
+		"CREATE TABLE " + sch + ".people (id int, contact text)",
+		"INSERT INTO " + sch + ".people SELECT g, CASE WHEN g > 2000 THEN 'p' || g || '@example.com' END FROM generate_series(1, 20000) g",
+		"ANALYZE " + sch + ".people",
+		"CREATE TABLE " + sch + ".people_p (id int, contact text) PARTITION BY RANGE (id)",
+		"CREATE TABLE " + sch + ".people_p1 PARTITION OF " + sch + ".people_p FOR VALUES FROM (0) TO (100000)",
+		"INSERT INTO " + sch + ".people_p SELECT * FROM " + sch + ".people",
+		"ANALYZE " + sch + ".people_p",
+	} {
+		if _, err := conn.Exec(ctx, q); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
+	}
+	f, err := Postgres(ctx, conn, Options{Schemas: []string{sch}, SampleRows: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"people", "people_p"} { // plain and partitioned
+		c := f.Index()[classification.Key{Schema: sch, Table: table, Column: "contact"}]
+		if c.Label != classify.Email {
+			t.Errorf("%s.contact: %s %v, want %s", table, c.Label, c.Evidence, classify.Email)
+		}
+		if !strings.Contains(fmt.Sprint(c.Evidence), "TABLESAMPLE SYSTEM") {
+			t.Errorf("%s: evidence does not record the sampling method: %v", table, c.Evidence)
+		}
 	}
 }

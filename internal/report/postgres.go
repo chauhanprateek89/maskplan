@@ -353,6 +353,8 @@ func (s *pgState) columnFindings() error {
 		switch {
 		case !ok:
 			s.add(Finding{Status: Unlabeled, Object: obj, Path: "readable raw; not in the classification, scan again: " + s.explain(r)})
+		case c.IsPII() && c.DerivedFrom != "":
+			s.add(Finding{Status: Unknown, Object: obj, Label: c.Label, Path: derivedPath(r.schema, r.rel, c) + ": " + s.explain(r)})
 		case c.IsPII():
 			s.add(Finding{Status: Raw, Object: obj, Label: c.Label, Path: s.explain(r)})
 		}
@@ -624,6 +626,8 @@ func (s *pgState) viewFindings() error {
 			}
 		}
 		switch {
+		case passthrough && pii[0].label.DerivedFrom != "":
+			s.add(Finding{Status: Unknown, Object: obj, Label: pii[0].label.Label, Path: "passes through " + derivedPath(pii[0].schema, pii[0].rel, pii[0].label) + "; " + access})
 		case passthrough:
 			base := pii[0].schema + "." + pii[0].rel + "." + pii[0].col
 			s.add(Finding{Status: Raw, Object: obj, Label: pii[0].label.Label, Path: "passes through " + base + "; " + access})
@@ -643,6 +647,13 @@ func (s *pgState) viewFindings() error {
 	return nil
 }
 
+// derivedPath explains a materialized token column. Its values are tokens
+// only if whatever writes them computes tokens; until the report can verify
+// that (the trigger maskplan apply will create), it is not MASKED.
+func derivedPath(schema, rel string, c classification.Column) string {
+	return fmt.Sprintf("%s.%s.%s is classified as the token column of %s, but what fills it is not verified", schema, rel, c.Column, c.DerivedFrom)
+}
+
 // labeledColumns returns the PII-labeled columns as parallel arrays.
 func (s *pgState) labeledColumns() (schemas, tables, cols []string) {
 	for k, c := range s.cls {
@@ -655,7 +666,10 @@ func (s *pgState) labeledColumns() (schemas, tables, cols []string) {
 
 // functionFindings flags SECURITY DEFINER functions the target can execute
 // whose owner can read labeled columns raw: calling one runs with the owner's
-// rights, which the report cannot see through.
+// rights, which the report cannot see through. User-defined ones are
+// UNKNOWN. Functions that belong to an extension are WARN, naming the
+// extension: on managed services extensions are owned by the admin role,
+// which can read everything, so UNKNOWN would fail every role there.
 func (s *pgState) functionFindings() error {
 	sch, tbl, col := s.labeledColumns()
 	q := `SELECT p.oid::regprocedure::text, o.rolname,
@@ -664,7 +678,10 @@ func (s *pgState) functionFindings() error {
 				JOIN pg_namespace ln ON ln.nspname = l.s
 				JOIN pg_class lc ON lc.relnamespace = ln.oid AND lc.relname = l.t
 				JOIN pg_attribute la ON la.attrelid = lc.oid AND la.attname = l.c
-				WHERE has_column_privilege(p.proowner, lc.oid, la.attnum, 'SELECT'))
+				WHERE has_column_privilege(p.proowner, lc.oid, la.attnum, 'SELECT')),
+			(SELECT e.extname FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
+				WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+					AND d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e')
 		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_roles o ON o.oid = p.proowner
 		WHERE p.prosecdef AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype) AND ` + scopeSQL("n", 2)
 	rows, err := s.tx.Query(s.ctx, q, s.roleOIDs(), s.schemas(), sch, tbl, col)
@@ -676,15 +693,20 @@ func (s *pgState) functionFindings() error {
 		var sig, owner string
 		var execs []uint32
 		var n int
-		if err := rows.Scan(&sig, &owner, &execs, &n); err != nil {
+		var ext *string
+		if err := rows.Scan(&sig, &owner, &execs, &n, &ext); err != nil {
 			return err
 		}
 		if len(execs) == 0 || n == 0 {
 			continue
 		}
 		r := s.roles[execs[0]]
-		s.add(Finding{Status: Unknown, Object: "function " + sig,
-			Path: fmt.Sprintf("SECURITY DEFINER, runs as %s, who can read %d labeled columns raw; executable by %s%s", owner, n, r.name, s.via(r))})
+		path := fmt.Sprintf("SECURITY DEFINER, runs as %s, who can read %d labeled columns raw; executable by %s%s", owner, n, r.name, s.via(r))
+		if ext != nil {
+			s.add(Finding{Status: Warn, Object: "function " + sig, Path: "from extension " + *ext + ": " + path + "; extension functions are not traced"})
+			continue
+		}
+		s.add(Finding{Status: Unknown, Object: "function " + sig, Path: path})
 	}
 	return rows.Err()
 }

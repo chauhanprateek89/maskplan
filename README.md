@@ -97,6 +97,7 @@ go test ./... -p 1 -v
 | `bench/` | Benchmark harness and Docker Compose setup |
 | `docs/token-spec.md` | Token specification, version 1 |
 | `docs/report.md` | What scan and report check, statuses and limitations |
+| `SECURITY.md` | How to report a vulnerability, and the UNKNOWN-never-MASKED guarantee |
 
 ## License
 
