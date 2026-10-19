@@ -1,0 +1,48 @@
+name: Tried it
+description: You ran maskplan (the demo or your own database). Tell us what happened.
+title: "Tried it: "
+labels: ["tried-it"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for trying maskplan. A few honest lines are worth more than a long report.
+        **Do not paste real data, customer names, keys, passwords or connection strings.** Counts and statuses are enough.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you run it?
+      options:
+        - The demo (demo/README.md)
+        - A staging or test copy of a real database
+        - A production database
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Engine and version
+      placeholder: PostgreSQL 16 on RDS, MySQL 8.0 self-hosted, ...
+  - type: textarea
+    id: found
+    attributes:
+      label: Did `report` show you something you did not know about?
+      description: For example "a role could read emails through a membership we forgot". Statuses and counts, not values.
+    validations:
+      required: true
+  - type: textarea
+    id: apply
+    attributes:
+      label: Would you run `apply` on a real database? Why or why not?
+    validations:
+      required: true
+  - type: textarea
+    id: blocked
+    attributes:
+      label: What stopped you, confused you, or broke?
+  - type: textarea
+    id: wrong
+    attributes:
+      label: Anything it got wrong?
+      description: A column labeled wrongly, a finding that is not true, a view reported RAW or UNKNOWN that you believe is safe.

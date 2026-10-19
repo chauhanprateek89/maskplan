@@ -106,3 +106,17 @@ jobs:
           docker exec managed pg_isready -h 127.0.0.1 -U maskplan -d managed
       - name: Report on the simulated managed service
         run: MASKPLAN_TEST_MANAGED_DSN=postgres://maskplan:maskplan@localhost:5433/managed go test ./internal/report/ -run Managed -v -count=1
+
+  # The ten-minute demo (demo/README.md), built from the real Dockerfile and
+  # checked step by step: it must work the first time a stranger runs it.
+  demo:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the demo image
+        run: docker compose -f demo/compose.yaml build
+      - name: Run the demo and check what it shows
+        run: demo/check.sh
+      - name: Stop it
+        if: always()
+        run: docker compose -f demo/compose.yaml down -v
