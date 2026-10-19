@@ -4,6 +4,8 @@ Terraform-style PII policies for Postgres and MySQL, so AI agents query masked d
 
 > **Pseudonymized is not anonymous.** maskplan replaces values with keyed tokens. Anyone holding the key can test a guessed value, and under GDPR tokenized data is still personal data. Treat it as a way to limit exposure, not as anonymization.
 
+**Try it in ten minutes** with only Docker: [demo/README.md](demo/README.md) finds five access mistakes on a synthetic bank, then builds a clean agent login.
+
 ## Status
 
 Pre-alpha. What works today, on PostgreSQL 13 to 17 and MySQL 8.0 and 8.4:

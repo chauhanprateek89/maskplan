@@ -1,0 +1,29 @@
+# A ten-minute maskplan demo on a synthetic Irish bank. Only Docker needed.
+# Every command is in demo/README.md.
+name: maskplan-demo
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: maskplan
+      POSTGRES_PASSWORD: maskplan
+      POSTGRES_DB: bank
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "maskplan", "-d", "bank"]
+      interval: 2s
+      retries: 30
+  maskplan:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    image: maskplan-demo
+    environment:
+      MASKPLAN_DSN: postgres://maskplan:maskplan@db:5432/bank?sslmode=disable
+      # Demo values. For real use, keep the key and passwords in a secret store.
+      MASKPLAN_KEY: demo-only-key-never-use-for-real-data
+      AI_AGENT_PASSWORD: demo-only-password
+    volumes:
+      - ./work:/work
+    depends_on:
+      db:
+        condition: service_healthy
