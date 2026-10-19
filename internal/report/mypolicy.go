@@ -100,7 +100,7 @@ func (s *myState) policyDiff(identity string, t *compile.Table, v compile.View, 
 			ok = rec != nil && rec.transform == d.Transform && rec.base == [2]string{t.Schema, t.Name} && rec.col == c.Name
 		}
 		if !ok {
-			return fmt.Sprintf("column %s is %s; the policy's is %s (%s)", c.Name, printableExpr(expr), d.Transform, d.Why)
+			return fmt.Sprintf("column %s is %s; the policy's is %s (%s)", c.Name, s.expr(expr), d.Transform, d.Why)
 		}
 	}
 	return ""
@@ -210,7 +210,7 @@ func (s *myState) conditionFindings() error {
 				if l, ok := s.cls[classification.Key{Schema: rel[0], Table: rel[1], Column: col}]; ok && l.IsPII() {
 					s.add(Finding{Status: Unknown, Object: "view " + k, Label: l.Label,
 						Path: fmt.Sprintf("its condition %s reads %s.%s.%s raw for every row, whatever the account selects; errors in it can pass the value on",
-							printableExpr(cond), rel[0], rel[1], col)})
+							s.expr(cond), rel[0], rel[1], col)})
 					break conditions
 				}
 			}

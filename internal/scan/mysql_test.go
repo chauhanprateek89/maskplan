@@ -46,7 +46,7 @@ func TestScanMySQL(t *testing.T) {
 				IF(n % 2 = 0, 'IE29AIBK93115212345678', 'GB82 WEST 1234 5698 7654 32'), IF(n % 2 = 0, '4111111111111111', '5500 0000 0000 0004'),
 				CONCAT('192.168.1.', n % 250), DATE_ADD('1980-01-01', INTERVAL n DAY), '1980-01-01', NOW(),
 				JSON_OBJECT('k', n), JSON_OBJECT('applicant', JSON_OBJECT('full_name', 'A B')), 'active', NULL, 1000000 + n,
-				IF(n % 2 = 0, 4111111111111111, 5500000000000004), 353871230000 + n, 1000.5 + n, 1, CONCAT('tok_', MD5(n)), NULL
+				IF(n % 2 = 0, 4111111111111111, 5500000000000004), 353871230000 + n, 1000.5 + n, 1, CONCAT('tok_', LEFT(SHA2(n, 256), 32)), NULL
 			FROM g`,
 		// 5,000 rows, email NULL in the first 500: sampled by key range.
 		"CREATE TABLE " + sch + ".people (id int PRIMARY KEY, contact varchar(100))",

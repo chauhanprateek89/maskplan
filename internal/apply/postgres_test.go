@@ -3,6 +3,7 @@ package apply
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
@@ -148,7 +150,7 @@ func TestApplyPostgres(t *testing.T) {
 				"maskplan token of mpa_app.users.phone", "maskplan fake_email of mpa_app.tickets.requester_email")
 		}
 		check(t, "mpa_support", false, true, "maskplan fake_email of mpa_app.tickets.requester_email",
-			"WARN      view mpa_support.tickets", "shows only rows where (b.tenant_id = 1); not checked against a policy")
+			"WARN      view mpa_support.tickets", "shows only rows where <expression hidden; --show-expressions shows it>; not checked against a policy")
 		check(t, "mpa_support", true, true, "maskplan fake_email of mpa_app.tickets.requester_email")
 	})
 
@@ -287,4 +289,43 @@ func TestApplyPostgres(t *testing.T) {
 		}
 		check(t, "mpa_agent", true, true)
 	})
+}
+
+// A statement holding a secret that fails: the error shows its display
+// form, never its SQL.
+func TestRunErrorsHideSecretsPostgresMySQL(t *testing.T) {
+	for _, c := range []struct {
+		engine, dsn string
+		stmt        compile.Statement
+	}{
+		{"postgres", os.Getenv("MASKPLAN_TEST_POSTGRES_DSN"), compile.Statement{
+			SQL: `ALTER ROLE "mpa_no_such_role" PASSWORD 'run-error-secret'`, Display: `ALTER ROLE "mpa_no_such_role" PASSWORD '…'`}},
+		{"mysql", os.Getenv("MASKPLAN_TEST_MYSQL_DSN"), compile.Statement{
+			SQL: `ALTER USER 'mpa_no_such'@'%' IDENTIFIED BY 'run-error-secret'`, Display: `ALTER USER 'mpa_no_such'@'%' IDENTIFIED BY '…'`}},
+	} {
+		if c.dsn == "" {
+			continue
+		}
+		plan := &compile.Plan{Statements: []compile.Statement{c.stmt}}
+		var err error
+		ctx := context.Background()
+		if c.engine == "postgres" {
+			conn, cerr := pgx.Connect(ctx, c.dsn)
+			if cerr != nil {
+				t.Fatal(cerr)
+			}
+			err = RunPostgres(ctx, conn, plan)
+			conn.Close(ctx)
+		} else {
+			db, cerr := sql.Open("mysql", c.dsn)
+			if cerr != nil {
+				t.Fatal(cerr)
+			}
+			err = RunMySQL(ctx, db, plan)
+			db.Close()
+		}
+		if err == nil || strings.Contains(err.Error(), "run-error-secret") || !strings.Contains(err.Error(), "'…'") {
+			t.Errorf("%s: err = %v", c.engine, err)
+		}
+	}
 }

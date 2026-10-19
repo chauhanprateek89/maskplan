@@ -1,6 +1,6 @@
 # maskplan plan, apply and destroy
 
-`apply` compiles one YAML policy into native database objects: for each agent identity, a role that can log in (or not), a schema of masked views it can read, and its settings. Enforcement then lives in the database: any client that connects as that role gets masked data, with no proxy in the path. PostgreSQL 13 and later, and MySQL 8.0 and 8.4 ([differences](#mysql)). Tokens are the same on both engines, so agents can join across them.
+`apply` compiles one YAML policy into native database objects: for each agent identity, a role that can log in (or not), a schema of masked views it can read, and its settings. Enforcement then lives in the database: any client that connects as that role gets masked data, with no proxy in the path. PostgreSQL 13 and later, and MySQL 8.0, 8.4 and 9 ([differences](#mysql)). Tokens are the same on both engines, so agents can join across them.
 
 ```bash
 maskplan scan --dsn "$ADMIN_DSN"          # classification.yaml: review it and commit it
