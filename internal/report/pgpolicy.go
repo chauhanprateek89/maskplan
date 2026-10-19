@@ -57,7 +57,7 @@ func (s *pgState) policyFindings() error {
 				return err
 			}
 			if where != "" {
-				s.add(Finding{Status: Warn, Object: "view " + k, Path: "shows only rows where " + printableExpr(where) + "; not checked against a policy (pass --policy)"})
+				s.add(Finding{Status: Warn, Object: "view " + k, Path: "shows only rows where " + s.expr(where) + "; not checked against a policy (pass --policy)"})
 			}
 		}
 		return nil
@@ -103,7 +103,7 @@ func (s *pgState) policyFindings() error {
 		}
 		filter := ""
 		if v.Filter != "" {
-			filter = "; the policy's rows filter is " + printableExpr(v.Filter)
+			filter = "; the policy's rows filter is " + s.expr(v.Filter)
 		}
 		if !slices.Equal(cols, want) {
 			s.add(Finding{Status: Unknown, Object: obj, Path: fmt.Sprintf("has columns %s; the policy's view has %s; run maskplan apply",

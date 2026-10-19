@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/chauhanprateek89/maskplan/internal/classification"
 	"github.com/chauhanprateek89/maskplan/internal/compile"
 	"github.com/chauhanprateek89/maskplan/internal/policy"
@@ -40,6 +42,14 @@ func MySQL(ctx context.Context, db *sql.DB, account string, cls *classification.
 		return nil, err
 	}
 	defer conn.ExecContext(context.Background(), "SET SESSION MAX_EXECUTION_TIME = DEFAULT")
+	// The report reads EXPLAIN FORMAT=JSON version 1 and the rewritten
+	// statement SHOW WARNINGS gives with it. MySQL 9 defaults to version 2,
+	// which has neither the table access types nor note 1003. The variable
+	// exists from 8.3; 8.0 has only version 1.
+	if _, err := conn.ExecContext(ctx, "SET SESSION explain_json_format_version = 1"); err != nil && !isUnknownVariable(err) {
+		return nil, err
+	}
+	defer conn.ExecContext(context.Background(), "SET SESSION explain_json_format_version = DEFAULT")
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -133,6 +143,14 @@ type myTableGrant struct {
 	column     string
 	privileges string
 }
+
+// isUnknownVariable reports MySQL error 1193, unknown system variable.
+func isUnknownVariable(err error) bool {
+	var myErr *mysql.MySQLError
+	return errors.As(err, &myErr) && myErr.Number == 1193
+}
+
+func (s *myState) expr(x string) string { return showExpr(s.opts.ShowExpressions, dialectMySQL, x) }
 
 func (s *myState) add(f Finding) { s.report.Findings = append(s.report.Findings, f) }
 
@@ -1054,7 +1072,7 @@ func (s *myState) viewFindings() error {
 		// rewrite holds values from constant tables, data and key alike.
 		short := ""
 		if exprs, _, err := s.viewDefinition(c[0], c[1]); err == nil && exprs != nil {
-			short = printableExpr(exprs[c[2]])
+			short = s.expr(exprs[c[2]])
 		}
 		type ref struct {
 			base         [2]string

@@ -325,6 +325,11 @@ func findTables(v any, out *[]map[string]any) {
 // masked views must hash-join on a token instead of nesting loops.
 func TestPlanMySQL(t *testing.T) {
 	db := mysqlSetup(t)
+	// MySQL 9 defaults to EXPLAIN JSON version 2; this test reads version 1.
+	// db is limited to one connection, so the setting sticks.
+	if _, err := db.Exec("SET SESSION explain_json_format_version = 1"); err != nil && !strings.Contains(err.Error(), "1193") {
+		t.Fatal(err)
+	}
 
 	var raw string
 	if err := db.QueryRow("EXPLAIN FORMAT=JSON SELECT max(email) FROM " + planSchema + ".v_users").Scan(&raw); err != nil {

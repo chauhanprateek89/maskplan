@@ -1,6 +1,6 @@
 # maskplan scan and report
 
-`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later, and MySQL 8.0 and 8.4 (see [MySQL](#mysql)).
+`scan` labels the personal data in a database. `report --role` answers, for one role: which of that data can it read raw, by which privilege path, and would anyone know? Both only read. PostgreSQL 13 and later, and MySQL 8.0, 8.4 and 9 (see [MySQL](#mysql)).
 
 ```bash
 export MASKPLAN_DSN=postgres://admin@db.internal:5432/app
@@ -36,6 +36,8 @@ Foreign tables and unpopulated materialized views are classified by name and typ
 ## report
 
 Run it as an inspecting user that can read the catalog and the views in scope: the database owner or an admin role, not the role being reported on. It runs in a read-only transaction with a statement timeout.
+
+Findings show no SQL expressions by default: they go to CI logs and pull requests, and a view's expression can hold key pads written into it or values the optimizer folded in from a table. `--show-expressions` prints them through a lexer that replaces every literal over 8 characters, dollar-quoted, `E''` and backslash-escaped ones included, and shows nothing of an expression it cannot read.
 
 ### Statuses
 
