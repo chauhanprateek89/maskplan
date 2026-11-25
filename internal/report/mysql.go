@@ -134,6 +134,7 @@ type myDBGrant struct {
 	pattern string
 	sel     bool
 	exec    bool
+	privs   map[string]bool // the keyTablePrivileges it grants, by name
 }
 
 // myTableGrant is a row of tables_priv, columns_priv or procs_priv.
@@ -296,7 +297,12 @@ func parseRoleList(v string) [][2]string {
 }
 
 var userPrivColumns = []string{"Select_priv", "File_priv", "Super_priv", "Create_user_priv", "Grant_priv", "Repl_slave_priv",
-	"Process_priv", "Execute_priv", "Show_view_priv"}
+	"Process_priv", "Execute_priv", "Show_view_priv",
+	"Insert_priv", "Update_priv", "Delete_priv", "Drop_priv", "References_priv", "Trigger_priv"}
+
+// keyTablePrivileges are the privileges checked on the key table, as
+// mysql.user and mysql.db name their columns (Drop_priv allows TRUNCATE).
+var keyTablePrivileges = []string{"Select", "Insert", "Update", "Delete", "Drop", "References", "Trigger"}
 
 func (s *myState) loadGrants() error {
 	s.userRows = map[[2]string]map[string]string{}
@@ -344,15 +350,27 @@ func (s *myState) loadGrants() error {
 	}
 	rows.Close()
 
-	rows, err = s.tx.QueryContext(s.ctx, "SELECT User, Host, Db, Select_priv = 'Y', Execute_priv = 'Y' FROM mysql.db")
+	q = "SELECT User, Host, Db, Select_priv = 'Y', Execute_priv = 'Y'"
+	for _, p := range keyTablePrivileges {
+		q += ", " + p + "_priv = 'Y'"
+	}
+	rows, err = s.tx.QueryContext(s.ctx, q+" FROM mysql.db")
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var g myDBGrant
-		if err := rows.Scan(&g.account[0], &g.account[1], &g.pattern, &g.sel, &g.exec); err != nil {
+		g := myDBGrant{privs: map[string]bool{}}
+		has := make([]bool, len(keyTablePrivileges))
+		dest := []any{&g.account[0], &g.account[1], &g.pattern, &g.sel, &g.exec}
+		for i := range has {
+			dest = append(dest, &has[i])
+		}
+		if err := rows.Scan(dest...); err != nil {
 			rows.Close()
 			return err
+		}
+		for i, p := range keyTablePrivileges {
+			g.privs[p] = has[i]
 		}
 		if s.inScope[g.account] {
 			s.dbRows = append(s.dbRows, g)
@@ -443,30 +461,39 @@ func hasPriv(set, priv string) bool {
 // selectPaths lists the grants by which the target can SELECT the column
 // (or, with column "", every column of the table).
 func (s *myState) selectPaths(db, table, column string) []string {
+	return s.privPaths(db, table, column, "Select")
+}
+
+// privPaths lists the grants by which the target holds priv ("Select",
+// "Insert", ...: a keyTablePrivileges name) on the column, or with column ""
+// on the table itself. Only Select, Insert, Update and References exist on
+// columns.
+func (s *myState) privPaths(db, table, column, priv string) []string {
 	var out []string
+	name := strings.ToUpper(priv)
 	for _, a := range s.accounts {
 		k := a.key()
 		v := s.via(a)
-		if s.userRows[k]["Select_priv"] == "Y" {
-			out = append(out, "global SELECT granted to "+a.String()+v)
+		if s.userRows[k][priv+"_priv"] == "Y" {
+			out = append(out, "global "+name+" granted to "+a.String()+v)
 			continue
 		}
 		for _, g := range s.dbRows {
-			if g.account == k && g.sel && dbPatternMatch(g.pattern, db) {
-				out = append(out, fmt.Sprintf("SELECT on `%s`.* granted to %s%s", g.pattern, a, v))
+			if g.account == k && dbPatternMatch(g.pattern, db) && (g.privs[priv] || priv == "Select" && g.sel) {
+				out = append(out, fmt.Sprintf("%s on `%s`.* granted to %s%s", name, g.pattern, a, v))
 			}
 		}
 		for _, g := range s.tblRows {
-			if g.account == k && g.db == db && g.name == table && hasPriv(g.privileges, "Select") {
-				out = append(out, "SELECT on the table granted to "+a.String()+v)
+			if g.account == k && g.db == db && g.name == table && hasPriv(g.privileges, priv) {
+				out = append(out, name+" on the table granted to "+a.String()+v)
 			}
 		}
 		if column == "" {
 			continue
 		}
 		for _, g := range s.colRows {
-			if g.account == k && g.db == db && g.name == table && g.column == column && hasPriv(g.privileges, "Select") {
-				out = append(out, "SELECT on the column granted to "+a.String()+v)
+			if g.account == k && g.db == db && g.name == table && g.column == column && hasPriv(g.privileges, priv) {
+				out = append(out, name+" on the column granted to "+a.String()+v)
 			}
 		}
 	}
@@ -1189,12 +1216,33 @@ func (s *myState) keyFindings() error {
 		return nil
 	}
 	obj := s.internal + ".key_material"
-	var paths []string
-	for _, c := range []string{"id", "ipad", "opad"} {
-		paths = append(paths, s.selectPaths(s.internal, "key_material", c)...)
+	// Every privilege, not only SELECT: INSERT, UPDATE, DELETE or DROP
+	// (which allows TRUNCATE) can put in a key the account knows, and a
+	// trigger can copy the key when apply next writes it.
+	var held, readPaths, otherPaths []string
+	for _, p := range keyTablePrivileges {
+		var ps []string
+		for _, c := range []string{"", "id", "ipad", "opad"} {
+			ps = append(ps, s.privPaths(s.internal, "key_material", c, p)...)
+		}
+		switch {
+		case len(ps) == 0:
+		case p == "Select":
+			readPaths = ps
+		default:
+			held = append(held, strings.ToUpper(p))
+			otherPaths = append(otherPaths, ps...)
+		}
 	}
-	if len(paths) > 0 {
-		s.add(Finding{Status: Key, Object: obj, Path: "can read the token key material: " + strings.Join(dedupe(paths), "; ") + "; every token can be reversed by guessing"})
+	if len(readPaths) > 0 {
+		for _, path := range keyPrivilegePaths([]string{"SELECT"}, "through "+strings.Join(dedupe(readPaths), "; ")) {
+			s.add(Finding{Status: Key, Object: obj, Path: path})
+		}
+	}
+	if len(held) > 0 {
+		for _, path := range keyPrivilegePaths(held, "through "+strings.Join(dedupe(otherPaths), "; ")) {
+			s.add(Finding{Status: Key, Object: obj, Path: path})
+		}
 	}
 	var ipad, opad []byte
 	var n int

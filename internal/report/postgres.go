@@ -1251,25 +1251,45 @@ func (s *pgState) keyAndReplicationFindings() error {
 		return err
 	}
 	if exists {
-		rows, err := s.tx.Query(s.ctx, `SELECT r FROM unnest($1::oid[]) r
-			WHERE has_schema_privilege(r, $2::text, 'USAGE') AND has_any_column_privilege(r, to_regclass($3), 'SELECT')`,
+		// Every privilege, not only SELECT: INSERT, UPDATE, DELETE or
+		// TRUNCATE can put in a key the role knows, and TRIGGER can copy
+		// the key when apply next writes it (trigger functions run as the
+		// user writing). The column-level ones count on any column.
+		rows, err := s.tx.Query(s.ctx, `SELECT r, array_remove(ARRAY[
+				CASE WHEN has_any_column_privilege(r, t, 'SELECT') THEN 'SELECT' END,
+				CASE WHEN has_any_column_privilege(r, t, 'INSERT') THEN 'INSERT' END,
+				CASE WHEN has_any_column_privilege(r, t, 'UPDATE') THEN 'UPDATE' END,
+				CASE WHEN has_table_privilege(r, t, 'DELETE') THEN 'DELETE' END,
+				CASE WHEN has_table_privilege(r, t, 'TRUNCATE') THEN 'TRUNCATE' END,
+				CASE WHEN has_any_column_privilege(r, t, 'REFERENCES') THEN 'REFERENCES' END,
+				CASE WHEN has_table_privilege(r, t, 'TRIGGER') THEN 'TRIGGER' END], NULL)
+			FROM unnest($1::oid[]) r, to_regclass($3) t
+			WHERE has_schema_privilege(r, $2::text, 'USAGE')`,
 			s.roleOIDs(), s.internal, keyTable)
 		if err != nil {
 			return err
 		}
-		var readers []uint32
+		type holder struct {
+			oid   uint32
+			privs []string
+		}
+		var holders []holder
 		for rows.Next() {
-			var oid uint32
-			if err := rows.Scan(&oid); err != nil {
+			var h holder
+			if err := rows.Scan(&h.oid, &h.privs); err != nil {
 				rows.Close()
 				return err
 			}
-			readers = append(readers, oid)
+			if len(h.privs) > 0 {
+				holders = append(holders, h)
+			}
 		}
 		rows.Close()
-		for _, oid := range readers {
-			r := s.roles[oid]
-			s.add(Finding{Status: Key, Object: s.internal + ".key_material", Path: "can read the token key material as " + r.name + s.via(r) + "; every token can be reversed by guessing"})
+		for _, h := range holders {
+			r := s.roles[h.oid]
+			for _, path := range keyPrivilegePaths(h.privs, "as "+r.name+s.via(r)) {
+				s.add(Finding{Status: Key, Object: s.internal + ".key_material", Path: path})
+			}
 		}
 		sp, err := s.tx.Begin(s.ctx)
 		if err != nil {

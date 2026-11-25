@@ -98,3 +98,62 @@ func TestKeyRowsWarning(t *testing.T) {
 		}
 	}
 }
+
+// Every privilege on the key table is a KEY finding, and the finding says
+// what the privilege allows.
+func TestKeyPrivilegePaths(t *testing.T) {
+	for _, c := range []struct {
+		privs []string
+		want  []string // one entry per finding, each a substring
+	}{
+		{[]string{"SELECT"}, []string{"can read the token key material"}},
+		{[]string{"INSERT"}, []string{"holds INSERT on the token key material as x: it can replace the key"}},
+		{[]string{"SELECT", "UPDATE", "TRIGGER"}, []string{"can read", "holds UPDATE, TRIGGER on the token key material as x: it can replace the key with one it knows, so every token computed afterwards can be reversed by guessing; a trigger it creates"}},
+		{[]string{"REFERENCES"}, []string{"holds REFERENCES on the token key material as x: no role but the one running apply"}},
+	} {
+		got := keyPrivilegePaths(c.privs, "as x")
+		if len(got) != len(c.want) {
+			t.Errorf("%v: %d findings %q, want %d", c.privs, len(got), got, len(c.want))
+			continue
+		}
+		for i := range got {
+			if !strings.Contains(got[i], c.want[i]) {
+				t.Errorf("%v: finding %q, want it to contain %q", c.privs, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+// The MySQL grant tables are evaluated by hand, so the evaluation of
+// privileges other than SELECT is tested without a server too; the
+// fixtures in mysql_test.go check it against MySQL itself.
+func TestPrivPathsMySQL(t *testing.T) {
+	a := myAccount{user: "agent", host: "%"}
+	r := myAccount{user: "writer", host: "%", how: "granted role", chain: "'agent'@'%' > 'writer'@'%'"}
+	const db, tbl = "maskplan_internal", "key_material"
+	s := &myState{
+		accounts: []myAccount{a, r},
+		userRows: map[[2]string]map[string]string{a.key(): {"Select_priv": "N"}, r.key(): {"Trigger_priv": "Y"}},
+		dbRows:   []myDBGrant{{account: a.key(), pattern: `maskplan\_internal`, privs: map[string]bool{"Delete": true}}},
+		tblRows:  []myTableGrant{{account: a.key(), db: db, name: tbl, privileges: "Insert,Drop"}},
+		colRows:  []myTableGrant{{account: a.key(), db: db, name: tbl, column: "ipad", privileges: "Update"}},
+	}
+	for _, c := range []struct {
+		priv, column string
+		want         []string
+	}{
+		{"Select", "ipad", nil},
+		{"Insert", "", []string{"INSERT on the table granted to 'agent'@'%'"}},
+		{"Update", "", nil},
+		{"Update", "ipad", []string{"UPDATE on the column granted to 'agent'@'%'"}},
+		{"Delete", "", []string{"DELETE on `maskplan\\_internal`.* granted to 'agent'@'%'"}},
+		{"Drop", "", []string{"DROP on the table granted to 'agent'@'%'"}},
+		{"Trigger", "", []string{"global TRIGGER granted to 'writer'@'%' (granted role: 'agent'@'%' > 'writer'@'%')"}},
+		{"References", "id", nil},
+	} {
+		got := s.privPaths(db, tbl, c.column, c.priv)
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%s on %q: %q, want %q", c.priv, c.column, got, c.want)
+		}
+	}
+}

@@ -87,7 +87,7 @@ The rule behind the table: a path the report cannot trace is `UNKNOWN`, never `M
 | Managed-service admin roles: `rds_superuser`, `cloudsqlsuperuser`, `azure_pg_admin`, `alloydbsuperuser` | `UNKNOWN` |
 | `CREATEROLE` before PostgreSQL 16 (can grant itself `pg_read_all_data`) | `UNKNOWN` |
 | `CREATEROLE` from PostgreSQL 16 | `WARN` |
-| Any privilege on the key table, even one column | `KEY` |
+| Any privilege on the key table, even on one column: `SELECT` reads the key; `INSERT`, `UPDATE`, `DELETE` and `TRUNCATE` can replace it with a key the role knows; `TRIGGER` can copy it when apply next writes it; `REFERENCES` has no use but apply's | `KEY` |
 | Key pads written as hex literals in any view or function definition (readable by every role) | `KEY` |
 | Default privileges granting `SELECT` on future tables to the role or `PUBLIC` | `WARN` |
 | `BYPASSRLS` where row-level security is in use | `WARN` |
@@ -128,7 +128,7 @@ MySQL has no function that says whether an account can read a column, so the rep
 | `PROXY` for another account | `UNKNOWN` |
 | `FILE`, `SUPER`, `CREATE USER`, global `GRANT OPTION`, `REPLICATION SLAVE`, `SET_USER_ID`, `SET_ANY_DEFINER`, `ROLE_ADMIN`, `BACKUP_ADMIN`, `CLONE_ADMIN` | `UNKNOWN` |
 | `SELECT` on `mysql.user` (account password hashes) | `UNKNOWN` |
-| Any privilege on the key table, or the key in a view or routine definition | `KEY` |
+| Any privilege on the key table (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, which allows `TRUNCATE`, `REFERENCES`, `TRIGGER`), or the key in a view or routine definition | `KEY` |
 | `PROCESS` (other sessions' statements), `AUDIT_ADMIN` | `WARN` |
 | Partial revokes (not evaluated: global grants are taken to apply everywhere); anonymous accounts; binary logging on (the key's `INSERT` is in the binlog) | `WARN` |
 

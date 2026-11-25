@@ -160,6 +160,7 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"mpt_barrier", "mpt_fakemask", "mpt_clean", "mpt_secdef", "mpt_defpriv", "mpt_fdw", "mpt_key",
 		"mpt_keycol", "mpt_part", "mpt_matview", "mpt_unlab", "mpt_createrole CREATEROLE", "mpt_srvfiles",
 		"mpt_readall", "mpt_nouse", "mpt_sneaky", "mpt_repl REPLICATION", "mpt_stats", "mpt_derived",
+		"mpt_keyinsert", "mpt_keyupdate", "mpt_keytrigger", "mpt_keytruncate",
 		"mpt_pii_reader NOLOGIN", "mpt_agent_admin_only LOGIN PASSWORD '" + adminOnlyPassword + "'",
 	}
 	for _, r := range roles {
@@ -293,6 +294,13 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"GRANT USAGE ON SCHEMA mpt_internal TO mpt_key, mpt_keycol",
 		"GRANT SELECT ON mpt_internal.key_material TO mpt_key",
 		"GRANT SELECT (ipad) ON mpt_internal.key_material TO mpt_keycol",
+		// Writing the key table is as bad as reading it: a key the role
+		// chose makes every later token reversible.
+		"GRANT USAGE ON SCHEMA mpt_internal TO mpt_keyinsert, mpt_keyupdate, mpt_keytrigger, mpt_keytruncate",
+		"GRANT INSERT ON mpt_internal.key_material TO mpt_keyinsert",
+		"GRANT UPDATE (ipad) ON mpt_internal.key_material TO mpt_keyupdate",
+		"GRANT TRIGGER ON mpt_internal.key_material TO mpt_keytrigger",
+		"GRANT TRUNCATE ON mpt_internal.key_material TO mpt_keytruncate",
 		"GRANT SELECT ON mpt_data.events_2026 TO mpt_part",
 		"GRANT USAGE ON SCHEMA mpt_parts TO mpt_part",
 		"GRANT SELECT ON mpt_parts.events_2027 TO mpt_part",
@@ -460,6 +468,10 @@ func TestReportPostgres(t *testing.T) {
 		{role: "mpt_fdw", needFDW: true, want: []expect{{Unknown, "foreign server mpt_loop", []string{"user mapping for mpt_fdw"}}}},
 		{role: "mpt_key", want: []expect{{Key, testInternal + ".key_material", []string{"as mpt_key"}}}},
 		{role: "mpt_keycol", want: []expect{{Key, testInternal + ".key_material", []string{"as mpt_keycol"}}}},
+		{role: "mpt_keyinsert", want: []expect{{Key, testInternal + ".key_material", []string{"INSERT", "as mpt_keyinsert", "replace the key"}}}},
+		{role: "mpt_keyupdate", want: []expect{{Key, testInternal + ".key_material", []string{"UPDATE", "as mpt_keyupdate", "replace the key"}}}},
+		{role: "mpt_keytrigger", want: []expect{{Key, testInternal + ".key_material", []string{"TRIGGER", "as mpt_keytrigger", "trigger"}}}},
+		{role: "mpt_keytruncate", want: []expect{{Key, testInternal + ".key_material", []string{"TRUNCATE", "as mpt_keytruncate"}}}},
 		{role: "mpt_part", want: []expect{{Raw, "mpt_data.events_2026.ip", nil}, {Raw, "mpt_parts.events_2027.ip", nil}}, mustNot: []string{"mpt_data.events.ip"}},
 		{role: "mpt_matview", want: []expect{{Raw, "mpt_data.customer_mv.email", nil}}, mustNot: []string{email}},
 		{role: "mpt_unlab", want: []expect{
@@ -713,6 +725,8 @@ func TestReportPostgres(t *testing.T) {
 			[]string{"REVOKE SELECT ON mpt_views.barrier FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_views FROM mpt_clean"}, false},
 		{"key table", []string{"GRANT USAGE ON SCHEMA mpt_internal TO mpt_clean", "GRANT SELECT (opad) ON mpt_internal.key_material TO mpt_clean"},
 			[]string{"REVOKE SELECT (opad) ON mpt_internal.key_material FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_internal FROM mpt_clean"}, false},
+		{"key table write", []string{"GRANT USAGE ON SCHEMA mpt_internal TO mpt_clean", "GRANT UPDATE ON mpt_internal.key_material TO mpt_clean"},
+			[]string{"REVOKE UPDATE ON mpt_internal.key_material FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_internal FROM mpt_clean"}, false},
 		{"security definer function", []string{"GRANT EXECUTE ON FUNCTION mpt_fn.customer_email(int) TO mpt_clean"},
 			[]string{"REVOKE EXECUTE ON FUNCTION mpt_fn.customer_email(int) FROM mpt_clean"}, false},
 		{"schema with a PUBLIC table", []string{"GRANT USAGE ON SCHEMA mpt_pub TO mpt_clean"}, []string{"REVOKE USAGE ON SCHEMA mpt_pub FROM mpt_clean"}, false},

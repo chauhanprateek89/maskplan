@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -158,4 +159,34 @@ func keyRowsWarning(d dialect, n int) string {
 		return "is empty: every token is NULL (no data is exposed, and token joins match nothing); run maskplan apply"
 	}
 	return fmt.Sprintf("has %d rows, want exactly 1: every query on a masked view that computes a token fails with \"more than one row returned by a subquery used as an expression\"; it is not the table apply creates", n)
+}
+
+// keyPrivilegePaths explains the privileges a role holds on the key table,
+// as one finding path each for reading it and for the rest. how says how
+// the role holds them ("as ROLE (inherited: ...)", or the grants).
+func keyPrivilegePaths(privs []string, how string) []string {
+	var out, write, other []string
+	for _, p := range privs {
+		switch p {
+		case "SELECT":
+			out = append(out, "can read the token key material "+how+"; every token can be reversed by guessing")
+		case "INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP":
+			write = append(write, p)
+		default:
+			other = append(other, p)
+		}
+	}
+	if len(write) == 0 && len(other) == 0 {
+		return out
+	}
+	var why []string
+	if len(write) > 0 {
+		why = append(why, "it can replace the key with one it knows, so every token computed afterwards can be reversed by guessing")
+	}
+	if slices.Contains(other, "TRIGGER") {
+		why = append(why, "a trigger it creates runs when apply next writes the key and can copy it")
+	}
+	why = append(why, "no role but the one running apply needs any privilege on it")
+	return append(out, fmt.Sprintf("holds %s on the token key material %s: %s",
+		strings.Join(append(write, other...), ", "), how, strings.Join(why, "; ")))
 }
