@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"flag"
 	"fmt"
 	"io"
@@ -149,12 +148,16 @@ type source struct {
 }
 
 func openSource(ctx context.Context, engine, dsn, internal string) (*source, error) {
+	if engine != "postgres" && engine != "mysql" {
+		return nil, fmt.Errorf("unknown engine %q", engine)
+	}
+	d, err := openDatabase(ctx, dsn, engine)
+	if err != nil {
+		return nil, err
+	}
 	switch engine {
 	case "postgres":
-		conn, err := connect(ctx, dsn)
-		if err != nil {
-			return nil, err
-		}
+		conn := d.pg
 		return &source{
 			plan: func(p *policy.Policy, name string, cls *classification.File, key []byte, pw map[string]string) (*compile.Plan, error) {
 				return apply.PlanPostgres(ctx, conn, p, name, cls, key, pw, internal)
@@ -166,19 +169,8 @@ func openSource(ctx context.Context, engine, dsn, internal string) (*source, err
 			},
 			close: func() { conn.Close(ctx) },
 		}, nil
-	case "mysql":
-		target, _, err := resolveDSN(dsn)
-		if err != nil {
-			return nil, err
-		}
-		db, err := sql.Open("mysql", target)
-		if err != nil {
-			return nil, err
-		}
-		if err := db.PingContext(ctx); err != nil {
-			db.Close()
-			return nil, err
-		}
+	default:
+		db := d.my
 		return &source{
 			plan: func(p *policy.Policy, name string, cls *classification.File, key []byte, pw map[string]string) (*compile.Plan, error) {
 				return apply.PlanMySQL(ctx, db, p, name, cls, key, pw, internal)
@@ -191,7 +183,6 @@ func openSource(ctx context.Context, engine, dsn, internal string) (*source, err
 			close: func() { db.Close() },
 		}, nil
 	}
-	return nil, fmt.Errorf("unknown engine %q", engine)
 }
 
 func identitiesOf(p *policy.Policy, source string) []string {
