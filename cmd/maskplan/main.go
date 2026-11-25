@@ -1,12 +1,12 @@
 // Command maskplan classifies personal data in a database, reports which of
 // it a role can read raw, and builds masked views for agent logins.
 //
-//	maskplan scan    --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml]
-//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--as-role] [--show-expressions] [--schema a,b] [--json]
+//	maskplan scan    --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml] [--internal-schema maskplan_internal]
+//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--source NAME] [--as-role] [--show-expressions] [--schema a,b] [--internal-schema maskplan_internal] [--json]
 //	maskplan init    [--classification classification.yaml] [--identity ai_agent] [--out maskplan.yaml]
-//	maskplan plan    [--policy maskplan.yaml] [--source NAME]
-//	maskplan apply   [--policy maskplan.yaml] [--source NAME] [--yes]
-//	maskplan destroy [--policy maskplan.yaml] [--source NAME] [--yes]
+//	maskplan plan    [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal]
+//	maskplan apply   [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal] [--yes]
+//	maskplan destroy [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal] [--yes]
 //
 // The DSN can also come from MASKPLAN_DSN. scan and report only read: scan
 // samples rows in a read-only transaction and stores no values; report reads
@@ -14,8 +14,8 @@
 // and destroy change nothing without --yes.
 //
 // Exit status: 0 success (report: nothing raw reachable), 1 report found raw
-// personal data, key material or paths it cannot trace (apply: a report
-// after apply did), 2 error.
+// personal data, key material, paths it cannot trace or readable columns the
+// classification does not list (apply: a report after apply did), 2 error.
 package main
 
 import (
@@ -43,12 +43,17 @@ import (
 )
 
 const usage = `usage:
-  maskplan scan   --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml]
-  maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--as-role] [--show-expressions] [--schema a,b] [--json]
-  maskplan init   [--classification classification.yaml] [--identity ai_agent] [--out maskplan.yaml]
-  maskplan plan|apply|destroy [--policy maskplan.yaml] [--source NAME] [--yes]
+  maskplan scan    --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml] [--internal-schema maskplan_internal]
+  maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--source NAME]
+                   [--as-role] [--show-expressions] [--schema a,b] [--internal-schema maskplan_internal] [--json]
+  maskplan init    [--classification classification.yaml] [--identity ai_agent] [--out maskplan.yaml]
+  maskplan plan    [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal]
+  maskplan apply|destroy [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal] [--yes]
 
-DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8
+plan only prints the SQL; apply and destroy print it too, and run it with --yes.
+Run maskplan COMMAND -h for what each flag does.
+
+DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL
 user:pass@tcp(host:3306)/db or mysql://user:pass@host:3306/db. On MySQL, --role
 names an account: user@host, or user when only one account has that name.
 `

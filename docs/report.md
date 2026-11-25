@@ -11,7 +11,7 @@ maskplan report --role ai_agent --schema public,billing
 maskplan report --role ai_agent --json > report.json
 ```
 
-Exit status: `0` nothing raw is reachable, `1` the report found raw personal data, key material, or a path it cannot trace, `2` an error. That makes `report` usable as a CI check on a staging copy of production grants.
+Exit status: `0` nothing raw is reachable, `1` the report found raw personal data, key material, a path it cannot trace, or a readable column the classification does not list (`UNLABELED`), `2` an error. That makes `report` usable as a CI check on a staging copy of production grants.
 
 ## scan
 

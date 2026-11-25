@@ -1202,7 +1202,7 @@ func (s *myState) keyFindings() error {
 		return err
 	}
 	if n != 1 {
-		s.add(Finding{Status: Warn, Object: obj, Path: fmt.Sprintf("has %d rows, want exactly 1: with none, every token is NULL", n)})
+		s.add(Finding{Status: Warn, Object: obj, Path: keyRowsWarning(dialectMySQL, n)})
 	} else {
 		if err := s.tx.QueryRowContext(s.ctx, "SELECT ipad, opad FROM "+quoteMy(s.internal)+".key_material").Scan(&ipad, &opad); err != nil {
 			return err

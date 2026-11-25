@@ -1267,7 +1267,7 @@ func (s *pgState) keyAndReplicationFindings() error {
 		if err := sp.QueryRow(s.ctx, "SELECT count(*) FROM "+keyTable).Scan(&n); err != nil {
 			s.add(Finding{Status: Warn, Object: s.internal + ".key_material", Path: "cannot count key rows as the inspecting user: " + err.Error()})
 		} else if n != 1 {
-			s.add(Finding{Status: Warn, Object: s.internal + ".key_material", Path: fmt.Sprintf("has %d rows, want exactly 1: with none, every token is NULL", n)})
+			s.add(Finding{Status: Warn, Object: s.internal + ".key_material", Path: keyRowsWarning(dialectPostgres, n)})
 		}
 		if n > 0 {
 			if err := s.keyLiteralFindings(sp, keyTable); err != nil {

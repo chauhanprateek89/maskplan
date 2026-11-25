@@ -143,3 +143,19 @@ func (r *Report) WriteJSON(w io.Writer) error {
 		Failed bool           `json:"failed"`
 	}{r, r.Counts(), r.Failed()})
 }
+
+// keyRowsWarning says what a key table that does not hold exactly one row
+// does to the masked views. Postgres views read the pads with scalar
+// subqueries; MySQL views join the key row on id = 1 (sqlexpr.KeySource).
+// apply's table holds exactly one row: id is its primary key, checked = 1.
+func keyRowsWarning(d dialect, n int) string {
+	switch {
+	case d == dialectMySQL && n == 0:
+		return "is empty: the masked views join the key row on id = 1, so they return no rows (no data is exposed, and none is served); run maskplan apply"
+	case d == dialectMySQL:
+		return fmt.Sprintf("has %d rows, want exactly 1: the masked views join every row with id = 1, so they repeat each row once per such key row, or return none; it is not the table apply creates", n)
+	case n == 0:
+		return "is empty: every token is NULL (no data is exposed, and token joins match nothing); run maskplan apply"
+	}
+	return fmt.Sprintf("has %d rows, want exactly 1: every query on a masked view that computes a token fails with \"more than one row returned by a subquery used as an expression\"; it is not the table apply creates", n)
+}

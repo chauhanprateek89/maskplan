@@ -77,3 +77,24 @@ func TestRedactSQL(t *testing.T) {
 		t.Errorf("an unreadable expression is shown: %s", got)
 	}
 }
+
+// The key-table warning states what the views actually do with a key table
+// that does not hold exactly one row: Postgres reads the pads with scalar
+// subqueries, MySQL joins the key row on id = 1 (sqlexpr.KeySource).
+func TestKeyRowsWarning(t *testing.T) {
+	for _, c := range []struct {
+		d         dialect
+		n         int
+		want, not string
+	}{
+		{dialectPostgres, 0, "every token is NULL", ""},
+		{dialectPostgres, 2, "more than one row returned by a subquery", "every token is NULL"},
+		{dialectMySQL, 0, "return no rows", "every token is NULL"},
+		{dialectMySQL, 3, "repeat", "every token is NULL"},
+	} {
+		got := keyRowsWarning(c.d, c.n)
+		if !strings.Contains(got, c.want) || (c.not != "" && strings.Contains(got, c.not)) {
+			t.Errorf("%v with %d rows: %q, want it to say %q", c.d, c.n, got, c.want)
+		}
+	}
+}
