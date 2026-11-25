@@ -25,7 +25,7 @@ var myTestDBs = []string{"mpt_data", "mpt_views", "mpt_masked", "mpt_fn", "mpt_s
 
 var myTestAccounts = []string{"mpt_reader", "mpt_mid", "mpt_mand", "mpt_direct", "mpt_table", "mpt_db", "mpt_wild", "mpt_global",
 	"mpt_inherit", "mpt_default", "mpt_rawview", "mpt_nested", "mpt_joinview", "mpt_expr", "mpt_agg", "mpt_sub", "mpt_invoker",
-	"mpt_clean", "mpt_sneaky", "mpt_secdef", "mpt_key", "mpt_keycol", "mpt_file", "mpt_repl", "mpt_proc", "mpt_proxy",
+	"mpt_clean", "mpt_sneaky", "mpt_secdef", "mpt_key", "mpt_keycol", "mpt_keyinsert", "mpt_keyupdate", "mpt_keytrigger", "mpt_file", "mpt_repl", "mpt_proc", "mpt_proxy",
 	"mpt_unlab", "mpt_derived", "mpt_mysqldb", "mpt_roleadmin", "mpt_tiny"}
 
 func myClassification() *classification.File {
@@ -203,6 +203,9 @@ func myFixture(t *testing.T) (*sql.DB, *mysql.Config) {
 		"GRANT EXECUTE ON FUNCTION mpt_fn.customer_email TO mpt_secdef@'%'",
 		"GRANT SELECT ON mpt_internal.key_material TO mpt_key@'%'",
 		"GRANT SELECT (ipad) ON mpt_internal.key_material TO mpt_keycol@'%'",
+		"GRANT INSERT ON mpt_internal.key_material TO mpt_keyinsert@'%'",
+		"GRANT UPDATE (ipad) ON mpt_internal.key_material TO mpt_keyupdate@'%'",
+		"GRANT TRIGGER ON mpt_internal.key_material TO mpt_keytrigger@'%'",
 		"GRANT FILE ON *.* TO mpt_file@'%'",
 		"GRANT REPLICATION SLAVE ON *.* TO mpt_repl@'%'",
 		"GRANT PROCESS ON *.* TO mpt_proc@'%'",
@@ -282,6 +285,9 @@ func TestReportMySQL(t *testing.T) {
 		{"mpt_secdef", []expect{{Unknown, "function mpt_fn.customer_email", []string{"SQL SECURITY DEFINER", "EXECUTE on the routine"}}}, nil, false},
 		{"mpt_key", []expect{{Key, key, []string{"SELECT on the table"}}}, nil, false},
 		{"mpt_keycol", []expect{{Key, key, []string{"SELECT on the column"}}}, nil, false},
+		{"mpt_keyinsert", []expect{{Key, key, []string{"INSERT on the table", "replace the key"}}}, nil, false},
+		{"mpt_keyupdate", []expect{{Key, key, []string{"UPDATE on the column", "replace the key"}}}, nil, false},
+		{"mpt_keytrigger", []expect{{Key, key, []string{"TRIGGER on the table", "trigger"}}}, nil, false},
 		{"mpt_file", []expect{{Unknown, "account", []string{"FILE"}}}, nil, false},
 		{"mpt_repl", []expect{{Unknown, "account", []string{"REPLICATION SLAVE"}}}, nil, false},
 		{"mpt_proc", []expect{{Warn, "account", []string{"PROCESS"}}}, nil, true},
@@ -413,6 +419,7 @@ func TestReportMySQL(t *testing.T) {
 		{"granted role", "GRANT mpt_reader@'%' TO mpt_clean@'%'", "REVOKE mpt_reader@'%' FROM mpt_clean@'%'"},
 		{"aggregate view", "GRANT SELECT ON mpt_views.agg TO mpt_clean@'%'", "REVOKE SELECT ON mpt_views.agg FROM mpt_clean@'%'"},
 		{"key column", "GRANT SELECT (opad) ON mpt_internal.key_material TO mpt_clean@'%'", "REVOKE SELECT (opad) ON mpt_internal.key_material FROM mpt_clean@'%'"},
+		{"key table write", "GRANT UPDATE ON mpt_internal.key_material TO mpt_clean@'%'", "REVOKE UPDATE ON mpt_internal.key_material FROM mpt_clean@'%'"},
 		{"definer function", "GRANT EXECUTE ON FUNCTION mpt_fn.customer_email TO mpt_clean@'%'", "REVOKE EXECUTE ON FUNCTION mpt_fn.customer_email FROM mpt_clean@'%'"},
 		{"wildcard database", "GRANT SELECT ON `mpt\\_dat_`.* TO mpt_clean@'%'", "REVOKE SELECT ON `mpt\\_dat_`.* FROM mpt_clean@'%'"},
 		{"file", "GRANT FILE ON *.* TO mpt_clean@'%'", "REVOKE FILE ON *.* FROM mpt_clean@'%'"},

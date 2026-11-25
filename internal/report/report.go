@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -142,4 +143,50 @@ func (r *Report) WriteJSON(w io.Writer) error {
 		Counts map[Status]int `json:"counts"`
 		Failed bool           `json:"failed"`
 	}{r, r.Counts(), r.Failed()})
+}
+
+// keyRowsWarning says what a key table that does not hold exactly one row
+// does to the masked views. Postgres views read the pads with scalar
+// subqueries; MySQL views join the key row on id = 1 (sqlexpr.KeySource).
+// apply's table holds exactly one row: id is its primary key, checked = 1.
+func keyRowsWarning(d dialect, n int) string {
+	switch {
+	case d == dialectMySQL && n == 0:
+		return "is empty: the masked views join the key row on id = 1, so they return no rows (no data is exposed, and none is served); run maskplan apply"
+	case d == dialectMySQL:
+		return fmt.Sprintf("has %d rows, want exactly 1: the masked views join every row with id = 1, so they repeat each row once per such key row, or return none; it is not the table apply creates", n)
+	case n == 0:
+		return "is empty: every token is NULL (no data is exposed, and token joins match nothing); run maskplan apply"
+	}
+	return fmt.Sprintf("has %d rows, want exactly 1: every query on a masked view that computes a token fails with \"more than one row returned by a subquery used as an expression\"; it is not the table apply creates", n)
+}
+
+// keyPrivilegePaths explains the privileges a role holds on the key table,
+// as one finding path each for reading it and for the rest. how says how
+// the role holds them ("as ROLE (inherited: ...)", or the grants).
+func keyPrivilegePaths(privs []string, how string) []string {
+	var out, write, other []string
+	for _, p := range privs {
+		switch p {
+		case "SELECT":
+			out = append(out, "can read the token key material "+how+"; every token can be reversed by guessing")
+		case "INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP":
+			write = append(write, p)
+		default:
+			other = append(other, p)
+		}
+	}
+	if len(write) == 0 && len(other) == 0 {
+		return out
+	}
+	var why []string
+	if len(write) > 0 {
+		why = append(why, "it can replace the key with one it knows, so every token computed afterwards can be reversed by guessing")
+	}
+	if slices.Contains(other, "TRIGGER") {
+		why = append(why, "a trigger it creates runs when apply next writes the key and can copy it")
+	}
+	why = append(why, "no role but the one running apply needs any privilege on it")
+	return append(out, fmt.Sprintf("holds %s on the token key material %s: %s",
+		strings.Join(append(write, other...), ", "), how, strings.Join(why, "; ")))
 }

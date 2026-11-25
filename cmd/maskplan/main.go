@@ -1,12 +1,12 @@
 // Command maskplan classifies personal data in a database, reports which of
 // it a role can read raw, and builds masked views for agent logins.
 //
-//	maskplan scan    --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml]
-//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--as-role] [--show-expressions] [--schema a,b] [--json]
+//	maskplan scan    --dsn DSN [--schema a,b] [--sample 100] [--out classification.yaml] [--internal-schema maskplan_internal]
+//	maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--source NAME] [--as-role] [--show-expressions] [--schema a,b] [--internal-schema maskplan_internal] [--json]
 //	maskplan init    [--classification classification.yaml] [--identity ai_agent] [--out maskplan.yaml]
-//	maskplan plan    [--policy maskplan.yaml] [--source NAME]
-//	maskplan apply   [--policy maskplan.yaml] [--source NAME] [--yes]
-//	maskplan destroy [--policy maskplan.yaml] [--source NAME] [--yes]
+//	maskplan plan    [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal]
+//	maskplan apply   [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal] [--yes]
+//	maskplan destroy [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal] [--yes]
 //
 // The DSN can also come from MASKPLAN_DSN. scan and report only read: scan
 // samples rows in a read-only transaction and stores no values; report reads
@@ -14,8 +14,8 @@
 // and destroy change nothing without --yes.
 //
 // Exit status: 0 success (report: nothing raw reachable), 1 report found raw
-// personal data, key material or paths it cannot trace (apply: a report
-// after apply did), 2 error.
+// personal data, key material, paths it cannot trace or readable columns the
+// classification does not list (apply: a report after apply did), 2 error.
 package main
 
 import (
@@ -36,18 +36,24 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/chauhanprateek89/maskplan/internal/classification"
+	"github.com/chauhanprateek89/maskplan/internal/dsn"
 	"github.com/chauhanprateek89/maskplan/internal/policy"
 	"github.com/chauhanprateek89/maskplan/internal/report"
 	"github.com/chauhanprateek89/maskplan/internal/scan"
 )
 
 const usage = `usage:
-  maskplan scan   --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml]
-  maskplan report --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--as-role] [--show-expressions] [--schema a,b] [--json]
-  maskplan init   [--classification classification.yaml] [--identity ai_agent] [--out maskplan.yaml]
-  maskplan plan|apply|destroy [--policy maskplan.yaml] [--source NAME] [--yes]
+  maskplan scan    --dsn DSN [--schema a,b] [--sample N] [--out classification.yaml] [--internal-schema maskplan_internal]
+  maskplan report  --dsn DSN --role ROLE [--classification classification.yaml] [--policy maskplan.yaml] [--source NAME]
+                   [--as-role] [--show-expressions] [--schema a,b] [--internal-schema maskplan_internal] [--json]
+  maskplan init    [--classification classification.yaml] [--identity ai_agent] [--out maskplan.yaml]
+  maskplan plan    [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal]
+  maskplan apply|destroy [--policy maskplan.yaml] [--source NAME] [--internal-schema maskplan_internal] [--yes]
 
-DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL 8
+plan only prints the SQL; apply and destroy print it too, and run it with --yes.
+Run maskplan COMMAND -h for what each flag does.
+
+DSN may also be set in MASKPLAN_DSN: postgres://..., or for MySQL
 user:pass@tcp(host:3306)/db or mysql://user:pass@host:3306/db. On MySQL, --role
 names an account: user@host, or user when only one account has that name.
 `
@@ -99,18 +105,76 @@ func splitList(s string) []string {
 	return out
 }
 
+// database is an open connection to one engine: pg on Postgres, my on MySQL.
+type database struct {
+	pg *pgx.Conn
+	my *sql.DB
+}
+
+func (d *database) close(ctx context.Context) {
+	if d.pg != nil {
+		d.pg.Close(ctx)
+	}
+	if d.my != nil {
+		d.my.Close()
+	}
+}
+
+// openDatabase connects to raw, or to $MASKPLAN_DSN when raw is empty.
+// engine is "postgres" or "mysql", or "" to tell from the DSN. Every
+// connection maskplan makes is opened here, so that every error on the way
+// passes through dsn.Scrub: URL parsers and drivers quote the DSN they
+// reject, password included.
+func openDatabase(ctx context.Context, raw, engine string) (*database, error) {
+	if raw == "" {
+		raw = os.Getenv("MASKPLAN_DSN")
+	}
+	if raw == "" {
+		return nil, errors.New("no database: pass --dsn or set MASKPLAN_DSN")
+	}
+	d, err := connectDSN(ctx, raw, engine)
+	return d, dsn.Scrub(err, raw)
+}
+
+func connectDSN(ctx context.Context, raw, engine string) (*database, error) {
+	target, isMySQL, err := resolveDSN(raw)
+	if err != nil {
+		return nil, err
+	}
+	if engine != "" {
+		isMySQL = engine == "mysql"
+	}
+	if isMySQL {
+		db, err := sql.Open("mysql", target)
+		if err != nil {
+			return nil, err
+		}
+		if err := db.PingContext(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
+		return &database{my: db}, nil
+	}
+	cfg, err := pgx.ParseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	cfg.RuntimeParams["application_name"] = "maskplan"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &database{pg: conn}, nil
+}
+
 // resolveDSN returns the DSN to use and whether it names a MySQL server:
 // either the Go driver's form (user:pass@tcp(host:3306)/db) or a URL
 // (mysql://user:pass@host:3306/db), which it converts to the driver's form.
-func resolveDSN(dsn string) (string, bool, error) {
-	if dsn == "" {
-		dsn = os.Getenv("MASKPLAN_DSN")
-	}
+// Its errors can quote the DSN: callers go through openDatabase.
+func resolveDSN(raw string) (string, bool, error) {
 	switch {
-	case dsn == "":
-		return "", false, errors.New("no database: pass --dsn or set MASKPLAN_DSN")
-	case strings.HasPrefix(dsn, "mysql://"):
-		u, err := url.Parse(dsn)
+	case strings.HasPrefix(raw, "mysql://"):
+		u, err := url.Parse(raw)
 		if err != nil {
 			return "", false, err
 		}
@@ -123,19 +187,10 @@ func resolveDSN(dsn string) (string, bool, error) {
 		}
 		cfg.DBName = strings.TrimPrefix(u.Path, "/")
 		return cfg.FormatDSN(), true, nil
-	case strings.Contains(dsn, "@tcp(") || strings.Contains(dsn, "@unix("):
-		return dsn, true, nil
+	case strings.Contains(raw, "@tcp(") || strings.Contains(raw, "@unix("):
+		return raw, true, nil
 	}
-	return dsn, false, nil
-}
-
-func connect(ctx context.Context, dsn string) (*pgx.Conn, error) {
-	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		return nil, err
-	}
-	cfg.RuntimeParams["application_name"] = "maskplan"
-	return pgx.ConnectConfig(ctx, cfg)
+	return raw, false, nil
 }
 
 func runScan(args []string, stdout, stderr io.Writer) error {
@@ -154,34 +209,24 @@ func runScan(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	target, isMySQL, err := resolveDSN(*dsn)
+	db, err := openDatabase(ctx, *dsn, "")
 	if err != nil {
 		return err
 	}
+	defer db.close(ctx)
 	rows := *sample
 	if rows == 0 {
 		rows = -1 // scan.Options: negative means no sampling
 	}
 	opts := scan.Options{Schemas: splitList(*schemas), InternalSchema: *internal, SampleRows: rows}
 	var f *classification.File
-	if isMySQL {
-		db, err := sql.Open("mysql", target)
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-		if f, err = scan.MySQL(ctx, db, opts); err != nil {
-			return err
-		}
+	if db.my != nil {
+		f, err = scan.MySQL(ctx, db.my, opts)
 	} else {
-		conn, err := connect(ctx, target)
-		if err != nil {
-			return err
-		}
-		defer conn.Close(ctx)
-		if f, err = scan.Postgres(ctx, conn, opts); err != nil {
-			return err
-		}
+		f, err = scan.Postgres(ctx, db.pg, opts)
+	}
+	if err != nil {
+		return err
 	}
 	previous, err := classification.Load(*out)
 	switch {
@@ -293,38 +338,28 @@ func runReport(args []string, stdout, stderr io.Writer) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	target, isMySQL, err := resolveDSN(*dsn)
-	if err != nil {
-		return 2, err
-	}
 	opts := report.Options{Schemas: splitList(*schemas), InternalSchema: *internal, Source: *source, AsRole: *asRole, ShowExpressions: *showExpr}
 	if *policyPath != "" {
 		if opts.Policy, err = policy.Load(*policyPath); err != nil {
 			return 2, err
 		}
 	}
+	db, err := openDatabase(ctx, *dsn, "")
+	if err != nil {
+		return 2, err
+	}
+	defer db.close(ctx)
 	var r *report.Report
-	if isMySQL {
+	if db.my != nil {
 		if *asRole {
 			return 2, errors.New("--as-role is for PostgreSQL; MySQL accounts are not roles one can SET ROLE to")
 		}
-		db, err := sql.Open("mysql", target)
-		if err != nil {
-			return 2, err
-		}
-		defer db.Close()
-		if r, err = report.MySQL(ctx, db, *role, cls, opts); err != nil {
-			return 2, err
-		}
+		r, err = report.MySQL(ctx, db.my, *role, cls, opts)
 	} else {
-		conn, err := connect(ctx, target)
-		if err != nil {
-			return 2, err
-		}
-		defer conn.Close(ctx)
-		if r, err = report.Postgres(ctx, conn, *role, cls, opts); err != nil {
-			return 2, err
-		}
+		r, err = report.Postgres(ctx, db.pg, *role, cls, opts)
+	}
+	if err != nil {
+		return 2, err
 	}
 	if cls.Source.Database != "" && cls.Source.Database != r.Database {
 		fmt.Fprintf(stderr, "maskplan: warning: %s was scanned from database %q, reporting on %q\n", *clsPath, cls.Source.Database, r.Database)

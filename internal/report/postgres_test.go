@@ -57,6 +57,10 @@ func testClassification() *classification.File {
 	return f
 }
 
+// adminOnlyPassword is the fixture login's password: a test value for a
+// role on a throwaway server.
+const adminOnlyPassword = "mpt-admin-only-pw"
+
 func pgTestConn(t *testing.T) (*pgx.Conn, int) {
 	t.Helper()
 	dsn := os.Getenv("MASKPLAN_TEST_POSTGRES_DSN")
@@ -156,6 +160,8 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"mpt_barrier", "mpt_fakemask", "mpt_clean", "mpt_secdef", "mpt_defpriv", "mpt_fdw", "mpt_key",
 		"mpt_keycol", "mpt_part", "mpt_matview", "mpt_unlab", "mpt_createrole CREATEROLE", "mpt_srvfiles",
 		"mpt_readall", "mpt_nouse", "mpt_sneaky", "mpt_repl REPLICATION", "mpt_stats", "mpt_derived",
+		"mpt_keyinsert", "mpt_keyupdate", "mpt_keytrigger", "mpt_keytruncate",
+		"mpt_pii_reader NOLOGIN", "mpt_agent_admin_only LOGIN PASSWORD '" + adminOnlyPassword + "'",
 	}
 	for _, r := range roles {
 		exec(t, conn, "CREATE ROLE "+r)
@@ -288,6 +294,13 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"GRANT USAGE ON SCHEMA mpt_internal TO mpt_key, mpt_keycol",
 		"GRANT SELECT ON mpt_internal.key_material TO mpt_key",
 		"GRANT SELECT (ipad) ON mpt_internal.key_material TO mpt_keycol",
+		// Writing the key table is as bad as reading it: a key the role
+		// chose makes every later token reversible.
+		"GRANT USAGE ON SCHEMA mpt_internal TO mpt_keyinsert, mpt_keyupdate, mpt_keytrigger, mpt_keytruncate",
+		"GRANT INSERT ON mpt_internal.key_material TO mpt_keyinsert",
+		"GRANT UPDATE (ipad) ON mpt_internal.key_material TO mpt_keyupdate",
+		"GRANT TRIGGER ON mpt_internal.key_material TO mpt_keytrigger",
+		"GRANT TRUNCATE ON mpt_internal.key_material TO mpt_keytruncate",
 		"GRANT SELECT ON mpt_data.events_2026 TO mpt_part",
 		"GRANT USAGE ON SCHEMA mpt_parts TO mpt_part",
 		"GRANT SELECT ON mpt_parts.events_2027 TO mpt_part",
@@ -307,6 +320,11 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 	if version >= 160000 {
 		// A grant with neither INHERIT nor SET gives nothing.
 		exec(t, conn, "GRANT mpt_reader TO mpt_nouse WITH INHERIT FALSE, SET FALSE")
+		// ADMIN alone gives everything: the member can grant itself the role.
+		exec(t, conn,
+			"GRANT USAGE ON SCHEMA mpt_data TO mpt_pii_reader, mpt_agent_admin_only",
+			"GRANT SELECT ON mpt_data.customers TO mpt_pii_reader",
+			"GRANT mpt_pii_reader TO mpt_agent_admin_only WITH ADMIN TRUE, INHERIT FALSE, SET FALSE")
 	}
 	var fdwAvailable bool
 	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'postgres_fdw')").Scan(&fdwAvailable); err != nil {
@@ -402,6 +420,10 @@ func TestReportPostgres(t *testing.T) {
 		{role: "mpt_inherit", want: []expect{{Raw, email, []string{"inherited: mpt_inherit > mpt_mid > mpt_reader"}}}},
 		{role: "mpt_noinherit", want: []expect{{Raw, email, []string{"by SET ROLE: mpt_noinherit > mpt_reader"}}}},
 		{role: "mpt_nouse", minVer: 160000, mustNot: []string{email, name, phone}, pass: true},
+		{role: "mpt_agent_admin_only", minVer: 160000, want: []expect{
+			{Raw, email, []string{"can grant itself mpt_pii_reader (ADMIN OPTION): mpt_agent_admin_only > mpt_pii_reader"}},
+			{Raw, name, nil},
+		}},
 		{role: "mpt_ownmember", want: []expect{{Raw, "mpt_data.accounts.iban", []string{"owner mpt_owner (inherited"}}}, mustNot: []string{email}},
 		{role: "mpt_super", want: []expect{
 			{Raw, email, []string{"superuser mpt_super"}},
@@ -446,6 +468,10 @@ func TestReportPostgres(t *testing.T) {
 		{role: "mpt_fdw", needFDW: true, want: []expect{{Unknown, "foreign server mpt_loop", []string{"user mapping for mpt_fdw"}}}},
 		{role: "mpt_key", want: []expect{{Key, testInternal + ".key_material", []string{"as mpt_key"}}}},
 		{role: "mpt_keycol", want: []expect{{Key, testInternal + ".key_material", []string{"as mpt_keycol"}}}},
+		{role: "mpt_keyinsert", want: []expect{{Key, testInternal + ".key_material", []string{"INSERT", "as mpt_keyinsert", "replace the key"}}}},
+		{role: "mpt_keyupdate", want: []expect{{Key, testInternal + ".key_material", []string{"UPDATE", "as mpt_keyupdate", "replace the key"}}}},
+		{role: "mpt_keytrigger", want: []expect{{Key, testInternal + ".key_material", []string{"TRIGGER", "as mpt_keytrigger", "trigger"}}}},
+		{role: "mpt_keytruncate", want: []expect{{Key, testInternal + ".key_material", []string{"TRUNCATE", "as mpt_keytruncate"}}}},
 		{role: "mpt_part", want: []expect{{Raw, "mpt_data.events_2026.ip", nil}, {Raw, "mpt_parts.events_2027.ip", nil}}, mustNot: []string{"mpt_data.events.ip"}},
 		{role: "mpt_matview", want: []expect{{Raw, "mpt_data.customer_mv.email", nil}}, mustNot: []string{email}},
 		{role: "mpt_unlab", want: []expect{
@@ -496,6 +522,49 @@ func TestReportPostgres(t *testing.T) {
 			}
 		})
 	}
+
+	// What the mpt_agent_admin_only case rests on, as the role itself, logged
+	// in: it cannot read the table, grants itself the reader role, and can.
+	t.Run("ADMIN OPTION alone lets a role grant itself in", func(t *testing.T) {
+		if version < 160000 {
+			t.Skip("before PostgreSQL 16 a grant WITH ADMIN OPTION is also a membership")
+		}
+		ctx := context.Background()
+		cfg, err := pgx.ParseConfig(os.Getenv("MASKPLAN_TEST_POSTGRES_DSN"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.User, cfg.Password = "mpt_agent_admin_only", adminOnlyPassword
+		agent, err := pgx.ConnectConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer agent.Close(ctx)
+		tx, err := agent.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) // the self-grant is undone with the transaction
+		const read = "SELECT email FROM mpt_data.customers WHERE id = 1"
+		var got string
+		if _, err := tx.Exec(ctx, "SAVEPOINT before"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.QueryRow(ctx, read).Scan(&got); err == nil {
+			t.Fatal("mpt_agent_admin_only read the table before granting itself anything")
+		}
+		for _, q := range []string{"ROLLBACK TO SAVEPOINT before", "GRANT mpt_pii_reader TO mpt_agent_admin_only"} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		if err := tx.QueryRow(ctx, read).Scan(&got); err != nil {
+			t.Fatalf("after granting itself mpt_pii_reader: %v", err)
+		}
+		if got != "alice@example.com" {
+			t.Errorf("read %q", got)
+		}
+	})
 
 	t.Run("clean role really cannot read raw", func(t *testing.T) {
 		ctx := context.Background()
@@ -656,6 +725,8 @@ func TestReportPostgres(t *testing.T) {
 			[]string{"REVOKE SELECT ON mpt_views.barrier FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_views FROM mpt_clean"}, false},
 		{"key table", []string{"GRANT USAGE ON SCHEMA mpt_internal TO mpt_clean", "GRANT SELECT (opad) ON mpt_internal.key_material TO mpt_clean"},
 			[]string{"REVOKE SELECT (opad) ON mpt_internal.key_material FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_internal FROM mpt_clean"}, false},
+		{"key table write", []string{"GRANT USAGE ON SCHEMA mpt_internal TO mpt_clean", "GRANT UPDATE ON mpt_internal.key_material TO mpt_clean"},
+			[]string{"REVOKE UPDATE ON mpt_internal.key_material FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_internal FROM mpt_clean"}, false},
 		{"security definer function", []string{"GRANT EXECUTE ON FUNCTION mpt_fn.customer_email(int) TO mpt_clean"},
 			[]string{"REVOKE EXECUTE ON FUNCTION mpt_fn.customer_email(int) FROM mpt_clean"}, false},
 		{"schema with a PUBLIC table", []string{"GRANT USAGE ON SCHEMA mpt_pub TO mpt_clean"}, []string{"REVOKE USAGE ON SCHEMA mpt_pub FROM mpt_clean"}, false},
@@ -666,6 +737,13 @@ func TestReportPostgres(t *testing.T) {
 		{"definer function leaves its extension", []string{extDropMember}, []string{extAddMember}, true},
 		{"column of a raw table", []string{"GRANT USAGE ON SCHEMA mpt_data TO mpt_clean", "GRANT SELECT (phone) ON mpt_data.customers TO mpt_clean"},
 			[]string{"REVOKE SELECT (phone) ON mpt_data.customers FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_data FROM mpt_clean"}, false},
+	}
+	if version >= 160000 {
+		mutations = append(mutations, struct {
+			name          string
+			apply, revert []string
+			needFDW       bool
+		}{"ADMIN OPTION on a reader", []string{"GRANT mpt_reader TO mpt_clean WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"}, []string{"REVOKE mpt_reader FROM mpt_clean"}, false})
 	}
 	for _, m := range mutations {
 		t.Run("mutation/"+m.name, func(t *testing.T) {

@@ -11,7 +11,7 @@ maskplan report --role ai_agent --schema public,billing
 maskplan report --role ai_agent --json > report.json
 ```
 
-Exit status: `0` nothing raw is reachable, `1` the report found raw personal data, key material, or a path it cannot trace, `2` an error. That makes `report` usable as a CI check on a staging copy of production grants.
+Exit status: `0` nothing raw is reachable, `1` the report found raw personal data, key material, a path it cannot trace, or a readable column the classification does not list (`UNLABELED`), `2` an error. That makes `report` usable as a CI check on a staging copy of production grants.
 
 ## scan
 
@@ -54,7 +54,7 @@ The rule behind the table: a path the report cannot trace is `UNKNOWN`, never `M
 
 ### What it checks
 
-**Roles.** Every role the target can act as: itself, every role reachable by membership with inheritance, and every role it can `SET ROLE` to (a `NOINHERIT` member still reaches its granted roles that way). Before PostgreSQL 16 membership always allows `SET ROLE`; from 16 each grant's `INHERIT` and `SET` options are honored, and a grant with neither gives nothing.
+**Roles.** Every role the target can act as: itself, every role reachable by membership with inheritance, and every role it can `SET ROLE` to (a `NOINHERIT` member still reaches its granted roles that way). Before PostgreSQL 16 membership always allows `SET ROLE`; from 16 each grant's `INHERIT`, `SET` and `ADMIN` options are honored. A grant with `ADMIN` alone reaches the role too: its holder can run `GRANT role TO itself` and then has the role's privileges, so the path says `can grant itself ROLE (ADMIN OPTION)`. A grant with none of the three gives nothing.
 
 **Tables, partitions, materialized views, foreign tables.** For each column, the server decides whether any reachable role can read it (`has_column_privilege` and `has_schema_privilege`), so the answer covers table grants, column grants, `PUBLIC`, ownership, superuser and `pg_read_all_data`. The report then names the path: owner, column grant, table grant, `PUBLIC`, superuser or `pg_read_all_data`, with the membership chain.
 
@@ -87,7 +87,7 @@ The rule behind the table: a path the report cannot trace is `UNKNOWN`, never `M
 | Managed-service admin roles: `rds_superuser`, `cloudsqlsuperuser`, `azure_pg_admin`, `alloydbsuperuser` | `UNKNOWN` |
 | `CREATEROLE` before PostgreSQL 16 (can grant itself `pg_read_all_data`) | `UNKNOWN` |
 | `CREATEROLE` from PostgreSQL 16 | `WARN` |
-| Any privilege on the key table, even one column | `KEY` |
+| Any privilege on the key table, even on one column: `SELECT` reads the key; `INSERT`, `UPDATE`, `DELETE` and `TRUNCATE` can replace it with a key the role knows; `TRIGGER` can copy it when apply next writes it; `REFERENCES` has no use but apply's | `KEY` |
 | Key pads written as hex literals in any view or function definition (readable by every role) | `KEY` |
 | Default privileges granting `SELECT` on future tables to the role or `PUBLIC` | `WARN` |
 | `BYPASSRLS` where row-level security is in use | `WARN` |
@@ -128,7 +128,7 @@ MySQL has no function that says whether an account can read a column, so the rep
 | `PROXY` for another account | `UNKNOWN` |
 | `FILE`, `SUPER`, `CREATE USER`, global `GRANT OPTION`, `REPLICATION SLAVE`, `SET_USER_ID`, `SET_ANY_DEFINER`, `ROLE_ADMIN`, `BACKUP_ADMIN`, `CLONE_ADMIN` | `UNKNOWN` |
 | `SELECT` on `mysql.user` (account password hashes) | `UNKNOWN` |
-| Any privilege on the key table, or the key in a view or routine definition | `KEY` |
+| Any privilege on the key table (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, which allows `TRUNCATE`, `REFERENCES`, `TRIGGER`), or the key in a view or routine definition | `KEY` |
 | `PROCESS` (other sessions' statements), `AUDIT_ADMIN` | `WARN` |
 | Partial revokes (not evaluated: global grants are taken to apply everywhere); anonymous accounts; binary logging on (the key's `INSERT` is in the binlog) | `WARN` |
 

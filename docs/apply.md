@@ -6,7 +6,7 @@
 maskplan scan --dsn "$ADMIN_DSN"          # classification.yaml: review it and commit it
 maskplan init                             # maskplan.yaml: a commented starter policy to review
 maskplan plan                             # print the SQL apply would run; changes nothing
-maskplan apply --yes                      # run it in one transaction, then report on every identity
+maskplan apply --yes                      # run it (one transaction on Postgres), then report on every identity
 maskplan report --dsn "$ADMIN_DSN" --role support_agent --policy maskplan.yaml
 maskplan destroy --yes                    # drop everything apply created, the key included
 ```
