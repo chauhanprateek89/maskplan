@@ -54,7 +54,7 @@ The rule behind the table: a path the report cannot trace is `UNKNOWN`, never `M
 
 ### What it checks
 
-**Roles.** Every role the target can act as: itself, every role reachable by membership with inheritance, and every role it can `SET ROLE` to (a `NOINHERIT` member still reaches its granted roles that way). Before PostgreSQL 16 membership always allows `SET ROLE`; from 16 each grant's `INHERIT` and `SET` options are honored, and a grant with neither gives nothing.
+**Roles.** Every role the target can act as: itself, every role reachable by membership with inheritance, and every role it can `SET ROLE` to (a `NOINHERIT` member still reaches its granted roles that way). Before PostgreSQL 16 membership always allows `SET ROLE`; from 16 each grant's `INHERIT`, `SET` and `ADMIN` options are honored. A grant with `ADMIN` alone reaches the role too: its holder can run `GRANT role TO itself` and then has the role's privileges, so the path says `can grant itself ROLE (ADMIN OPTION)`. A grant with none of the three gives nothing.
 
 **Tables, partitions, materialized views, foreign tables.** For each column, the server decides whether any reachable role can read it (`has_column_privilege` and `has_schema_privilege`), so the answer covers table grants, column grants, `PUBLIC`, ownership, superuser and `pg_read_all_data`. The report then names the path: owner, column grant, table grant, `PUBLIC`, superuser or `pg_read_all_data`, with the membership chain.
 

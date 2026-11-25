@@ -57,6 +57,10 @@ func testClassification() *classification.File {
 	return f
 }
 
+// adminOnlyPassword is the fixture login's password: a test value for a
+// role on a throwaway server.
+const adminOnlyPassword = "mpt-admin-only-pw"
+
 func pgTestConn(t *testing.T) (*pgx.Conn, int) {
 	t.Helper()
 	dsn := os.Getenv("MASKPLAN_TEST_POSTGRES_DSN")
@@ -156,6 +160,7 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 		"mpt_barrier", "mpt_fakemask", "mpt_clean", "mpt_secdef", "mpt_defpriv", "mpt_fdw", "mpt_key",
 		"mpt_keycol", "mpt_part", "mpt_matview", "mpt_unlab", "mpt_createrole CREATEROLE", "mpt_srvfiles",
 		"mpt_readall", "mpt_nouse", "mpt_sneaky", "mpt_repl REPLICATION", "mpt_stats", "mpt_derived",
+		"mpt_pii_reader NOLOGIN", "mpt_agent_admin_only LOGIN PASSWORD '" + adminOnlyPassword + "'",
 	}
 	for _, r := range roles {
 		exec(t, conn, "CREATE ROLE "+r)
@@ -307,6 +312,11 @@ func fixture(t *testing.T, conn *pgx.Conn, version int) bool {
 	if version >= 160000 {
 		// A grant with neither INHERIT nor SET gives nothing.
 		exec(t, conn, "GRANT mpt_reader TO mpt_nouse WITH INHERIT FALSE, SET FALSE")
+		// ADMIN alone gives everything: the member can grant itself the role.
+		exec(t, conn,
+			"GRANT USAGE ON SCHEMA mpt_data TO mpt_pii_reader, mpt_agent_admin_only",
+			"GRANT SELECT ON mpt_data.customers TO mpt_pii_reader",
+			"GRANT mpt_pii_reader TO mpt_agent_admin_only WITH ADMIN TRUE, INHERIT FALSE, SET FALSE")
 	}
 	var fdwAvailable bool
 	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'postgres_fdw')").Scan(&fdwAvailable); err != nil {
@@ -402,6 +412,10 @@ func TestReportPostgres(t *testing.T) {
 		{role: "mpt_inherit", want: []expect{{Raw, email, []string{"inherited: mpt_inherit > mpt_mid > mpt_reader"}}}},
 		{role: "mpt_noinherit", want: []expect{{Raw, email, []string{"by SET ROLE: mpt_noinherit > mpt_reader"}}}},
 		{role: "mpt_nouse", minVer: 160000, mustNot: []string{email, name, phone}, pass: true},
+		{role: "mpt_agent_admin_only", minVer: 160000, want: []expect{
+			{Raw, email, []string{"can grant itself mpt_pii_reader (ADMIN OPTION): mpt_agent_admin_only > mpt_pii_reader"}},
+			{Raw, name, nil},
+		}},
 		{role: "mpt_ownmember", want: []expect{{Raw, "mpt_data.accounts.iban", []string{"owner mpt_owner (inherited"}}}, mustNot: []string{email}},
 		{role: "mpt_super", want: []expect{
 			{Raw, email, []string{"superuser mpt_super"}},
@@ -496,6 +510,49 @@ func TestReportPostgres(t *testing.T) {
 			}
 		})
 	}
+
+	// What the mpt_agent_admin_only case rests on, as the role itself, logged
+	// in: it cannot read the table, grants itself the reader role, and can.
+	t.Run("ADMIN OPTION alone lets a role grant itself in", func(t *testing.T) {
+		if version < 160000 {
+			t.Skip("before PostgreSQL 16 a grant WITH ADMIN OPTION is also a membership")
+		}
+		ctx := context.Background()
+		cfg, err := pgx.ParseConfig(os.Getenv("MASKPLAN_TEST_POSTGRES_DSN"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.User, cfg.Password = "mpt_agent_admin_only", adminOnlyPassword
+		agent, err := pgx.ConnectConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer agent.Close(ctx)
+		tx, err := agent.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) // the self-grant is undone with the transaction
+		const read = "SELECT email FROM mpt_data.customers WHERE id = 1"
+		var got string
+		if _, err := tx.Exec(ctx, "SAVEPOINT before"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.QueryRow(ctx, read).Scan(&got); err == nil {
+			t.Fatal("mpt_agent_admin_only read the table before granting itself anything")
+		}
+		for _, q := range []string{"ROLLBACK TO SAVEPOINT before", "GRANT mpt_pii_reader TO mpt_agent_admin_only"} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+		if err := tx.QueryRow(ctx, read).Scan(&got); err != nil {
+			t.Fatalf("after granting itself mpt_pii_reader: %v", err)
+		}
+		if got != "alice@example.com" {
+			t.Errorf("read %q", got)
+		}
+	})
 
 	t.Run("clean role really cannot read raw", func(t *testing.T) {
 		ctx := context.Background()
@@ -666,6 +723,13 @@ func TestReportPostgres(t *testing.T) {
 		{"definer function leaves its extension", []string{extDropMember}, []string{extAddMember}, true},
 		{"column of a raw table", []string{"GRANT USAGE ON SCHEMA mpt_data TO mpt_clean", "GRANT SELECT (phone) ON mpt_data.customers TO mpt_clean"},
 			[]string{"REVOKE SELECT (phone) ON mpt_data.customers FROM mpt_clean", "REVOKE USAGE ON SCHEMA mpt_data FROM mpt_clean"}, false},
+	}
+	if version >= 160000 {
+		mutations = append(mutations, struct {
+			name          string
+			apply, revert []string
+			needFDW       bool
+		}{"ADMIN OPTION on a reader", []string{"GRANT mpt_reader TO mpt_clean WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"}, []string{"REVOKE mpt_reader FROM mpt_clean"}, false})
 	}
 	for _, m := range mutations {
 		t.Run("mutation/"+m.name, func(t *testing.T) {

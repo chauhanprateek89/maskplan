@@ -54,6 +54,7 @@ type pgRole struct {
 	name       string
 	inherited  bool   // every membership edge on the path inherits privileges
 	chain      string // target > ... > this role
+	selfGrant  string // a role on the path reached only by ADMIN OPTION, or ""
 	super      bool
 	createrole bool
 	bypassrls  bool
@@ -163,8 +164,12 @@ func scopeSQL(nsp string, param int) string {
 
 // loadRoles finds every role the target can act as. Before PostgreSQL 16 a
 // member can always SET ROLE to a granted role, and inherits its privileges
-// unless the member is NOINHERIT. From 16 each grant carries its own INHERIT
-// and SET options. A path that grants neither is unusable and skipped.
+// unless the member is NOINHERIT. From 16 each grant carries its own INHERIT,
+// SET and ADMIN options. A grant with ADMIN lets the member grant the role to
+// itself with INHERIT and SET (checked on 16.16: GRANT r TO self succeeds
+// and the next query has r's privileges), so it reaches the role as if it
+// inherited it; the path names the self-grant. A grant with none of the
+// three is unusable and skipped.
 func (s *pgState) loadRoles(role string) error {
 	err := s.tx.QueryRow(s.ctx, "SELECT oid FROM pg_roles WHERE rolname = $1", role).Scan(&s.self)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -174,22 +179,26 @@ func (s *pgState) loadRoles(role string) error {
 	}
 	edge := `(SELECT rolinherit FROM pg_roles WHERE oid = m.member)`
 	usable := `true`
+	selfGrant := `NULL::oid`
 	if s.version >= 160000 {
-		edge, usable = `m.inherit_option`, `(m.inherit_option OR m.set_option)`
+		edge = `(m.inherit_option OR m.admin_option)`
+		usable = `(m.inherit_option OR m.set_option OR m.admin_option)`
+		selfGrant = `CASE WHEN NOT (m.inherit_option OR m.set_option) THEN m.roleid END`
 	}
 	q := fmt.Sprintf(`
-		WITH RECURSIVE r(oid, path, inherited) AS (
-			SELECT $1::oid, ARRAY[$1::oid], true
+		WITH RECURSIVE r(oid, path, inherited, self_grant) AS (
+			SELECT $1::oid, ARRAY[$1::oid], true, NULL::oid
 			UNION ALL
-			SELECT m.roleid, r.path || m.roleid, r.inherited AND %s
+			SELECT m.roleid, r.path || m.roleid, r.inherited AND %s, coalesce(r.self_grant, %s)
 			FROM pg_auth_members m JOIN r ON m.member = r.oid
 			WHERE %s AND m.roleid <> ALL (r.path)
 		)
 		SELECT DISTINCT ON (r.oid) r.oid, ro.rolname, r.inherited,
 			(SELECT string_agg(x.rolname, ' > ' ORDER BY u.i) FROM unnest(r.path) WITH ORDINALITY u(o, i) JOIN pg_roles x ON x.oid = u.o),
+			coalesce((SELECT rolname FROM pg_roles WHERE oid = r.self_grant), ''),
 			ro.rolsuper, ro.rolcreaterole, ro.rolbypassrls, ro.rolreplication
 		FROM r JOIN pg_roles ro ON ro.oid = r.oid
-		ORDER BY r.oid, r.inherited DESC, cardinality(r.path)`, edge, usable)
+		ORDER BY r.oid, r.self_grant IS NOT NULL, r.inherited DESC, cardinality(r.path)`, edge, selfGrant, usable)
 	rows, err := s.tx.Query(s.ctx, q, s.self)
 	if err != nil {
 		return err
@@ -197,7 +206,7 @@ func (s *pgState) loadRoles(role string) error {
 	defer rows.Close()
 	for rows.Next() {
 		r := &pgRole{}
-		if err := rows.Scan(&r.oid, &r.name, &r.inherited, &r.chain, &r.super, &r.createrole, &r.bypassrls, &r.repl); err != nil {
+		if err := rows.Scan(&r.oid, &r.name, &r.inherited, &r.chain, &r.selfGrant, &r.super, &r.createrole, &r.bypassrls, &r.repl); err != nil {
 			return err
 		}
 		s.roles[r.oid] = r
@@ -214,6 +223,9 @@ func (s *pgState) loadRoles(role string) error {
 func (s *pgState) via(r *pgRole) string {
 	if r.oid == s.self {
 		return ""
+	}
+	if r.selfGrant != "" {
+		return fmt.Sprintf(" (can grant itself %s (ADMIN OPTION): %s)", r.selfGrant, r.chain)
 	}
 	if r.inherited {
 		return fmt.Sprintf(" (inherited: %s)", r.chain)
